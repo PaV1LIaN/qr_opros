@@ -1,39 +1,62 @@
 <?php
-use Bitrix\Main\ModuleManager;
+namespace QrMachine;
 
-class qr_machine extends CModule
+use Bitrix\Main\Loader;
+use Bitrix\Main\Application;
+use Bitrix\Main\Web\Uri;
+
+class EventHandlers
 {
-    public $MODULE_ID = "qr.machine";
-    public $MODULE_NAME = "QR-коды для опросов машин";
-    public $MODULE_DESCRIPTION = "Генерация QR на OnAfterIBlockElementAdd/Update";
-    public $PARTNER_NAME = "MyCompany";
-    public $PARTNER_URI  = "https://example.com";
+    // Константу IBLOCK_ID_MACHINES можно вынести в настройки модуля
+    const IBLOCK_ID_MACHINES = 42;
 
-    public function DoInstall()
+    /**
+     * @param array $arFields  Параметры события
+     */
+    public static function onAfterIBlockElementModify(&$arFields)
     {
-        ModuleManager::registerModule($this->MODULE_ID);
-        // Регистрируем события
-        RegisterModuleDependences(
-            "iblock", "OnAfterIBlockElementAdd",
-            $this->MODULE_ID, "QrMachine\\EventHandlers", "onAfterIBlockElementModify"
-        );
-        RegisterModuleDependences(
-            "iblock", "OnAfterIBlockElementUpdate",
-            $this->MODULE_ID, "QrMachine\\EventHandlers", "onAfterIBlockElementModify"
-        );
-    }
+        // отработать только при успешном сохранении и нужном инфоблоке
+        if (!$arFields["RESULT"] || (int)$arFields["IBLOCK_ID"] !== self::IBLOCK_ID_MACHINES) {
+            return;
+        }
 
-    public function DoUninstall()
-    {
-        // Убираем обработчики
-        UnRegisterModuleDependences(
-            "iblock", "OnAfterIBlockElementAdd",
-            $this->MODULE_ID, "QrMachine\\EventHandlers", "onAfterIBlockElementModify"
+        // Получаем детальный URL
+        $detailUrlTemplate = \CIBlock::GetArrayByID(self::IBLOCK_ID_MACHINES, "DETAIL_PAGE_URL");
+        $detailUrl = \CIBlock::ReplaceDetailUrl(
+            $detailUrlTemplate,
+            ["ELEMENT_ID" => $arFields["ID"], "ELEMENT_CODE" => $arFields["CODE"]]
         );
-        UnRegisterModuleDependences(
-            "iblock", "OnAfterIBlockElementUpdate",
-            $this->MODULE_ID, "QrMachine\\EventHandlers", "onAfterIBlockElementModify"
+
+        // Строим полный URL
+        $context = Application::getInstance()->getContext();
+        $uri = new Uri($context->getRequest()->getScheme() . '://' . $context->getServer()->getHttpHost() . $detailUrl);
+        $fullUrl = $uri->getLocator();
+
+        // Генерируем QR в tmp-файл
+        $tmpDir  = $_SERVER["DOCUMENT_ROOT"] . "/upload/qr_tmp/";
+        @mkdir($tmpDir, 0755, true);
+        $tmpFile = $tmpDir . "qr_{$arFields['ID']}.png";
+
+        include_once __DIR__ . "/phpqrcode.php";
+        \QRcode::png($fullUrl, $tmpFile, QR_ECLEVEL_L, 4, 2);
+
+        // Сохраняем в свойство-файл QR_CODE
+        $fileArray = \CFile::MakeFileArray($tmpFile);
+        $fileArray["MODULE_ID"] = "iblock";
+        \CIBlockElement::SetPropertyValuesEx(
+            $arFields["ID"],
+            self::IBLOCK_ID_MACHINES,
+            ["QR_CODE" => $fileArray]
         );
-        ModuleManager::unRegisterModule($this->MODULE_ID);
+
+        @unlink($tmpFile);
     }
 }
+
+
+
+
+
+
+
+
