@@ -1,43 +1,53 @@
-<?php if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die(); ?>
-<div class="qr-survey">
-  <img
-    src="<?=$arResult['QR_DATA_URI']?>"
-    alt="QR Code для опроса"
-    title="Сканируйте, чтобы пройти опрос">
-</div>
+<?php
+use Bitrix\Main\Loader;
+use Bitrix\Main\Application;
 
-<div id="bitrix24-form-container"></div>
+Loader::includeModule('iblock');
 
-<!-- Замените example.bitrix24.ru на ваш домен Битрикс24 -->
-<script src="https://example.bitrix24.ru/bitrix/js/crm/form_loader.js"></script>
-<script>
-  document.addEventListener('DOMContentLoaded', function() {
-    if (window.BX24 && BX24.Crm && BX24.Crm.FormManager) {
-      BX24.Crm.FormManager.render({
-        node: document.getElementById('bitrix24-form-container'),
-        formId: '<?=CUtil::JSEscape($arResult['FORM_ID'])?>',
-        lang: 'ru'
-      });
-    } else {
-      console.error('CRM FormManager не загружен');
+// ID вашего инфоблока «Машины»
+const IBLOCK_ID_MACHINES = 42;
+
+AddEventHandler("iblock", "OnAfterIBlockElementAdd",   ["QrGenerator", "handle"]);
+AddEventHandler("iblock", "OnAfterIBlockElementUpdate",["QrGenerator", "handle"]);
+
+class QrGenerator
+{
+    public static function handle(&$arFields)
+    {
+        // фильтруем только нужный инфоблок
+        if ((int)$arFields["IBLOCK_ID"] !== IBLOCK_ID_MACHINES) {
+            return;
+        }
+
+        // получаем detail page URL
+        $url = \CIBlock::ReplaceDetailUrl(
+            \CIBlock::GetArrayByID(IBLOCK_ID_MACHINES, "DETAIL_PAGE_URL"),
+            ["ELEMENT_ID" => $arFields["ID"], "ELEMENT_CODE" => $arFields["CODE"]]
+        );
+
+        // полный путь (включая домен)
+        $context = Application::getInstance()->getContext();
+        $host = $context->getServer()->getHttpHost();
+        $qrData = (preg_match('#^https?://#', $url) ? '' : 'https://'.$host).$url;
+
+        // генерируем PNG во временный файл
+        $tmpFile = $_SERVER["DOCUMENT_ROOT"]."/upload/tmp/qr_{$arFields['ID']}.png";
+        if (!is_dir(dirname($tmpFile))) {
+            mkdir(dirname($tmpFile), 0755, true);
+        }
+        include_once($_SERVER["DOCUMENT_ROOT"]."/local/php_interface/lib/phpqrcode.php");
+        \QRcode::png($qrData, $tmpFile, QR_ECLEVEL_L, 4, 2);
+
+        // сохраняем в свойство
+        $fileArray = \CFile::MakeFileArray($tmpFile);
+        $fileArray["MODULE_ID"] = "iblock";
+        \CIBlockElement::SetPropertyValuesEx(
+            $arFields["ID"],
+            IBLOCK_ID_MACHINES,
+            ["QR_CODE" => $fileArray]
+        );
+
+        // убираем временный файл
+        @unlink($tmpFile);
     }
-  });
-</script>
-
-<style>
-  .qr-survey {
-    text-align: center;
-    margin-bottom: 1.5em;
-  }
-  .qr-survey img {
-    width: 200px;
-    height: 200px;
-    border: 1px solid #e0e0e0;
-    padding: 4px;
-    background: #fff;
-  }
-  #bitrix24-form-container {
-    max-width: 400px;
-    margin: 0 auto;
-  }
-</style>
+}
