@@ -1,62 +1,48 @@
-Вот как можно привязать каждому автомобилю свой опрос и показывать уникальную статистику:
+Никаких сторонних «FormDesigner»-приложений ставить не нужно – достаточно штатного модуля Веб-формы, который уже есть в Сервисы → Веб-формы. Для реализации опросов используем компонент bitrix:form.result.new и скрытое поле CAR_ID, чтобы у каждого автомобиля была своя статистика.
+
+## Кратко
+
+1. Модуль «Веб-формы» уже установлен и включает в себя компонент form.result.new для отображения и сохранения ответов пользователя ([dev.1c-bitrix.ru][1]).
+2. Создаём форму в Сервисы → Веб-формы, добавляем там все вопросы и поле «CAR\_ID» (тип «Скрытое поле») ([dev.1c-bitrix.ru][2]).
+3. На странице опроса выводим компонент bitrix:form.result.new, передавая в параметре WEB_FORM_ID ID формы и через INITIAL_VALUES['CAR_ID'] текущий ID автомобиля.
+4. Для просмотра статистики в админке фильтруем результаты по полю CAR_ID или на фронте через form.result.list ([dev.1c-bitrix.ru][1]).
 
 ---
 
-## 1. Создаём веб-форму (опрос) в админке
+## 1. Проверяем модуль «Веб-формы»
 
-1. В административной панели сайта перейдите в **Контент → Веб-формы** (или «CRM-формы» в зависимости от вашей сборки).
-2. Нажмите **Добавить форму**.
+Убедитесь, что модуль включён в Настройки продукта → Модули → Веб-формы. Он даёт следующие компоненты ([dev.1c-bitrix.ru][1]):
 
-   * **Название**: «Опрос автомобиля»
-   * **Символьный код**: `survey_car`
-3. В полях формы создайте:
-
-   * Основные вопросы (например, «Оцените состояние автомобиля» и т.п.).
-   * Скрытое поле **ID автомобиля** (тип «Скрытое поле», код `CAR_ID`).
-
-> Запомните (или запишите) ID этой формы — далее в примерах будем считать, что это `$formId = 3`.
+* bitrix:form.result.new – вывод и сохранение формы
+* bitrix:form.result.list – вывод списка ответов
+* bitrix:form.result.view – просмотр конкретного результата
 
 ---
 
-## 2. Добавляем кнопку «Пройти опрос» в шаблон списка машин
+## 2. Создаём форму с полем CAR\_ID
 
-В вашем шаблоне `/local/templates/…/components/bitrix/news.list/cars_list/template.php` после вывода данных элемента добавьте:
-
-```php
-<a 
-  class="btn btn-primary" 
-  href="/cars/survey.php?CAR_ID=<?= $item['ID'] ?>"
->
-  Пройти опрос
-</a>
-```
-
-Теперь на каждой карточке будет ссылка вида
-
-```
-/cars/survey.php?CAR_ID=123
-```
-
-где `123` — ID конкретного элемента инфоблока.
+1. Зайдите в Сервисы → Веб-формы и нажмите Добавить форму.
+2. В настройках формы добавьте основные вопросы опроса.
+3. Добавьте скрытое поле с кодом CAR_ID (тип «Скрытое поле») – именно по нему будем фильтровать ответы ([dev.1c-bitrix.ru][2]).
+4. Сохраните и запишите ID созданной формы (например, $formId = 5).
 
 ---
 
-## 3. Создаём страницу опроса `/cars/survey.php`
+## 3. Встраиваем форму на страницу опроса
 
-```php
+На странице /cars/survey.php разместите:
+
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 use Bitrix\Main\Loader;
+Loader::includeModule("form");
 
-Loader::includeModule("form");            // Модуль веб-форм
-Loader::includeModule("iblock");          // Модуль инфоблоков (если понадобятся данные о машине)
+$carId  = intval($_GET["CAR_ID"]);  // получаем ID машины из URL
+$formId = 5;                       // замените на ваш ID формы
 
-$carId  = intval($_REQUEST["CAR_ID"]);    // из URL
-$formId = 3;                              // замените на реальный ID формы
+$APPLICATION->SetTitle("Опрос для автомобиля № ".$carId);
 
-$APPLICATION->SetTitle("Опрос для машины № ".$carId);
-
-// 1) Компонент вывода формы
+// 1) Вывод формы
 $APPLICATION->IncludeComponent(
   "bitrix:form.result.new",
   "",
@@ -66,62 +52,47 @@ $APPLICATION->IncludeComponent(
     "SEF_MODE"               => "N",
     "SUCCESS_URL"            => "/cars/survey.php?CAR_ID={$carId}&show_stats=Y",
     "VARIABLE_ALIASES"       => [],
-    "LIST_URL"               => "/cars/",
-    // Подставляем скрытое значение CAR_ID
-    "DEFAULT_FIELDS"         => [
-      "CAR_ID" => $carId
-    ],
+    "INITIAL_VALUES"         => ["CAR_ID" => $carId]
   ],
   false
 );
 
-// 2) После успешной отправки (параметр show_stats=Y) — показываем статистику
-if ($_REQUEST["show_stats"] === "Y"):
-
-  // Можно вывести общее число ответов
-  $rs = CFormResult::GetList(
-    $formId,
-    $by = "s_id",
-    $order = "asc",
-    ["CAR_ID" => $carId],
-    $isFiltered
-  );
-  $count = 0;
-  while ($rs->Fetch()) { $count++; }
-  echo "<p>Всего ответов: <strong>{$count}</strong></p>";
-
-  // Или подключить компонент для детального списка/графиков
-  $APPLICATION->IncludeComponent(
-    "bitrix:form.result.list",
-    "",
-    [
-      "FORM_ID"       => $formId,
-      "FILTER"        => ["=PROPERTY_CAR_ID" => $carId],
-      "CHAIN_ITEM_LINK" => "",
-      "CHAIN_ITEM_TEXT" => "",
-      "AJAX_MODE"     => "Y",
-    ],
-    false
-  );
-
-endif;
-
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
-```
-
-**Пояснения:**
-
-* При заходе на `/cars/survey.php?CAR_ID=…` пользователь увидит форму, где скрытое поле `CAR_ID` автоматически получит значение текущей машины.
-* После отправки его перенаправит на тот же URL с `&show_stats=Y` — и под формой появится статистика именно по этому `CAR_ID`.
+?>
+* Параметр INITIAL_VALUES (или DEFAULT_FIELDS в старых версиях) предзаполняет скрытое поле CAR_ID значением текущей машины ([dev.1c-bitrix.ru][3]).
 
 ---
 
-## 4. Итоговая навигация
+## 4. Просмотр и фильтрация результатов
 
-1. Пользователь на `/cars/index.php` видит список машин с кнопкой «Пройти опрос».
-2. Клик → `/cars/survey.php?CAR_ID=123` — форма опроса для машины № 123.
-3. После submit → `/cars/survey.php?CAR_ID=123&show_stats=Y` — форма + статистика ответов только по этой машине.
+### В админке
+
+1. Сервисы → Веб-формы → Результаты.
+2. В фильтре укажите поле CAR\_ID = нужный ID – увидите только ответы по этой машине.
+
+### На фронте (опционально)
+
+После отправки формы вы можете на той же странице подключить form.result.list:
+
+<?php if ($_GET["show_stats"] === "Y"): ?>
+  <? $APPLICATION->IncludeComponent(
+       "bitrix:form.result.list",
+       "",
+       [
+         "WEB_FORM_ID" => $formId,
+         "FILTER"      => ["=PROPERTY_CAR_ID" => $carId],
+         "AJAX_MODE"   => "Y"
+       ],
+       false
+     );
+  ?>
+<?php endif; ?>
+Это выведет таблицу всех ответов для текущего CAR_ID ([dev.1c-bitrix.ru][1]).
 
 ---
 
-Если нужно добавить более продвинутые графики или фильтрацию, можно подключить сторонние JS-библиотеки или расширить компонент `bitrix:form.result.list`. Дай знать, если нужна помощь с визуализацией!
+Итог: не нужен никакой сторонний «FormDesigner» – всё делается штатным модулем Веб-форм и стандартными компонентами form.result.new и form.result.list. Если что-то осталось неясно, уточните, какой шаг вызывает затруднения!
+
+[1]: https://dev.1c-bitrix.ru/user_help/components/services/web_forms/index.php?utm_source=chatgpt.com "Веб-формы - 1С-Битрикс"
+[2]: https://dev.1c-bitrix.ru/user_help/components/services/web_forms/form_result_new.php?utm_source=chatgpt.com "Заполнение веб-формы - 1С-Битрикс"
+[3]: https://dev.1c-bitrix.ru/community/forums/forum6/topic130222/?utm_source=chatgpt.com "Предзаполнение полей веб формы form.result.new с ..."
