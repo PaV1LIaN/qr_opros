@@ -2,32 +2,21 @@
 use Bitrix\Main\Loader;
 Loader::includeModule('iblock');
 
-$iblockId = YOUR_CARS_IBLOCK_ID; // подставьте ID созданного инфоблока
+$iblockId = YOUR_CARS_IBLOCK_ID;
 
 $APPLICATION->IncludeComponent(
-  "bitrix:iblock.element.add",
-  "",
+  "bitrix:news.list",
+  "cars_list",           // ваш шаблон
   [
-    "IBLOCK_TYPE"            => "cars",
-    "IBLOCK_ID"              => $iblockId,
-    "PROPERTY_CODES"         => [
-      "NAME",              // будем использовать NAME, например, как «Автомобиль №…»
-      "PROPERTY_BRAND",    // марка
-      "PROPERTY_TYPE",     // тип
-      "PROPERTY_REGNUMBER" // рег. знак
-    ],
-    "PROPERTY_CODES_REQUIRED" => [
-      "PROPERTY_BRAND",
-      "PROPERTY_TYPE",
-      "PROPERTY_REGNUMBER"
-    ],
-    "MAX_USER_ENTRIES"       => "1000",
-    "USER_MESSAGE_ADD"       => "Автомобиль успешно добавлен",
-    "USER_MESSAGE_EDIT"      => "Изменения сохранены",
-    "CUSTOM_TITLE_NAME"           => "Название записи",
-    "CUSTOM_TITLE_PROPERTY_BRAND"    => "Марка автомобиля",
-    "CUSTOM_TITLE_PROPERTY_TYPE"     => "Тип автомобиля",
-    "CUSTOM_TITLE_PROPERTY_REGNUMBER" => "Регистрационный знак"
+    "IBLOCK_TYPE"     => "cars",
+    "IBLOCK_ID"       => $iblockId,
+    "NEWS_COUNT"      => "20",
+    "SORT_BY1"        => "ID",
+    "SORT_ORDER1"     => "DESC",
+    "FIELD_CODE"      => ["NAME"],
+    "PROPERTY_CODE"   => ["BRAND", "TYPE", "REGNUMBER"],
+    "CACHE_TYPE"      => "A",
+    "CACHE_TIME"      => "3600",
   ],
   false
 );
