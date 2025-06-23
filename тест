@@ -1,23 +1,12 @@
-<?php
-use Bitrix\Main\Loader;
-Loader::includeModule('iblock');
-
-$iblockId = YOUR_CARS_IBLOCK_ID;
-
-$APPLICATION->IncludeComponent(
-  "bitrix:news.list",
-  "cars_list",           // ваш шаблон
-  [
-    "IBLOCK_TYPE"     => "cars",
-    "IBLOCK_ID"       => $iblockId,
-    "NEWS_COUNT"      => "20",
-    "SORT_BY1"        => "ID",
-    "SORT_ORDER1"     => "DESC",
-    "FIELD_CODE"      => ["NAME"],
-    "PROPERTY_CODE"   => ["BRAND", "TYPE", "REGNUMBER"],
-    "CACHE_TYPE"      => "A",
-    "CACHE_TIME"      => "3600",
-  ],
-  false
-);
-?>
+<? if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die(); ?>
+<div class="cars-container">
+  <? foreach ($arResult["ITEMS"] as $item): ?>
+    <div class="car-card">
+      <h3>
+        <?= htmlspecialchars($item["PROPERTIES"]["BRAND"]["VALUE"]) ?>
+        <?= htmlspecialchars($item["PROPERTIES"]["TYPE"]["VALUE"]) ?>
+      </h3>
+      <p>Рег. знак: <strong><?= htmlspecialchars($item["PROPERTIES"]["REGNUMBER"]["VALUE"]) ?></strong></p>
+    </div>
+  <? endforeach; ?>
+</div>
