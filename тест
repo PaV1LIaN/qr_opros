@@ -1,12 +1,12 @@
-<? if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die(); ?>
-<div class="cars-container">
-  <? foreach ($arResult["ITEMS"] as $item): ?>
-    <div class="car-card">
-      <h3>
-        <?= htmlspecialchars($item["PROPERTIES"]["BRAND"]["VALUE"]) ?>
-        <?= htmlspecialchars($item["PROPERTIES"]["TYPE"]["VALUE"]) ?>
-      </h3>
-      <p>Рег. знак: <strong><?= htmlspecialchars($item["PROPERTIES"]["REGNUMBER"]["VALUE"]) ?></strong></p>
-    </div>
-  <? endforeach; ?>
-</div>
+.cars-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.car-card {
+  border: 1px solid #ccc;
+  padding: 15px;
+  border-radius: 8px;
+  width: 200px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
