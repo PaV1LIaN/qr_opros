@@ -4,11 +4,17 @@
 // 1) Подключение к базе данных (PDO). 
 // Скопируйте свой код подключения, например, из .section.php или add_block.php
 require_once __DIR__ . '/.section.php'; 
+<<<<<<< HEAD
 //QRcode::png('https://snipp.ru/', __DIR__ . '/qr.png');
 
 // 2) Подключаем библиотеку phpqrcode
 require_once __DIR__ . '/phpqrcode/qrlib.php';
 //QRcode::png('https://snipp.ru/');
+=======
+
+// 2) Подключаем библиотеку phpqrcode
+require_once __DIR__ . '/phpqrcode/qrlib.php';
+>>>>>>> 6944e330a725fb646111403766203444d0904d92
 
 // 3) Проверяем параметр car_id
 if (!isset($_GET['car_id']) || !ctype_digit($_GET['car_id'])) {
@@ -31,8 +37,13 @@ if (!$car) {
 
 // 5) Формируем ссылку на опрос Vote с передачей car_id
 //    Замените «ваш_домен» и «17» на свои реальные значения
+<<<<<<< HEAD
 $voteId = 3; 
 $surveyLink = "https://bitrix24-test.itsnn.ru/bitrix/services/vote/vote.php?lang=ru"
+=======
+$voteId = 17; 
+$surveyLink = "https://ваш_домен/bitrix/services/vote/vote.php?lang=ru"
+>>>>>>> 6944e330a725fb646111403766203444d0904d92
             . "&VOTE_ID={$voteId}"
             . "&car_id=" . $carId;
 
@@ -54,4 +65,8 @@ $outFile = __DIR__ . "/qr_images/qr_car_{$carId}.png";
 QRcode::png($surveyLink, $outFile, QR_ECLEVEL_M, 8, 2);
 header("Location: qr_images/qr_car_{$carId}.png");
 exit;
+<<<<<<< HEAD
 */
+=======
+*/
+>>>>>>> 6944e330a725fb646111403766203444d0904d92
