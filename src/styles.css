@@ -1,0 +1,21 @@
+.block .qr-code-right {
+	text-align: right;
+	max-width: 116px;
+	max-height: 116px;
+}
+
+#blocks-container .block {
+	border: solid 1px;
+	margin: 10px;
+	padding: 5px;
+	width: 300px;
+}
+
+#blocks-container {
+	display: flex;
+	flex-wrap: wrap;
+}
+
+#content {
+	width: 1900px;
+}

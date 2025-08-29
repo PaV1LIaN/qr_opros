@@ -1,11 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="/local/qr-opros/src/styles.css">
+    <title>Document</title>
+</head>
+
 <?php
 //require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-
+include "/local/qr-opros/phpqrcode/qrlib.php";
 
 ?>
 <script src="/local/qr-opros/jquery-3.6.0.min.js"></script>
 
 <body>
+<div>
+
+</div>
 <div id='content'>
 <div id="blocks-container">
 </div>
@@ -30,7 +42,7 @@
                     $('#blocks-container').html(data);
                 }
             });
-        }
+            }
 
         loadBlocks();
 
@@ -53,12 +65,13 @@
                     var block = JSON.parse(blockData);
                     $('#blocks-container').append(`
                     <div class="block" car-id="${block.id}"> 
-                        <h4>${block.nameCar}</h4>
-                        <p>${block.typeCar}</p>
-						<p>${block.nomCar}</p>
-						<a href="application/index.php?block_id=${block.id}" class="order-btn">Скачать qr</a><br />
-						<a href="application/index.php?block_id=${block.id}" class="order-btn">Тест отзыв</a><br />
-                        <div class="remove-btn">Деактивировать</div>
+							<h3>${block.id}</h3>
+                        	<h4>${block.nameCar}</h4>
+                        	<p>${block.typeCar}</p>
+							<p>${block.nomCar}</p>
+							<a href="application/index.php?block_id=${block.id}" class="order-btn">Скачать qr</a><br />
+							<a href="application/index.php?block_id=${block.id}" class="order-btn">Тест отзыв</a><br />
+                        	<div class="remove-btn">Деактивировать</div>
                     </div>
                     `);
                     $('#modal').hide();
@@ -90,4 +103,24 @@
             });
         });
     });
-    </script>
+</script>
+<?php
+$blockId = isset($_GET['block_id']) ? intval($_GET['block_id']) : 0;
+		if ($blockId <= 0) {
+			return;
+		}
+
+
+/*
+$APPLICATION->IncludeComponent(
+		"qr_opros", // Папка /local/components/qr_opros
+		"",
+		[
+			"BLOCK_ID" => $blockId;
+			"FORM_ID" => "5678"
+		],
+		false
+	);
+*/
+?>
+
