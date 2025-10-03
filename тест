@@ -1,63 +1,81 @@
-<?php
-use Bitrix\Main\Context;
-
-require_once $_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php";
-require_once __DIR__."/lib/functions.php";
-
-global $USER;
-$request = Context::getCurrent()->getRequest();
-
-// --- обработка AJAX ---
-if ($USER->IsAdmin() && $request->getPost("AJAX") === "UPDATE_ACCESS") {
-    $siteId = intval($request->getPost("SITE_ID"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
-
-    $IBLOCK_ID = getPortalIblockId();
-    if ($IBLOCK_ID && $siteId) {
-        CIBlockElement::SetPropertyValuesEx($siteId, $IBLOCK_ID, [
-            "USER_GROUPS" => $siteGroups,
-            "USER_USERS"  => $siteUsers
-        ]);
-
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode([
-            "success" => true,
-            "message" => "Права доступа для сайта #$siteId обновлены"
-        ]);
-        die();
-    }
+// Создание группы-ролли для сайта
+function createSiteRole($siteTitle, $siteId) {
+    $group = new CGroup;
+    $arFields = [
+        "ACTIVE" => "Y",
+        "C_SORT" => 100,
+        "STRING_ID" => "SITE_ROLE_".$siteId,
+        "NAME" => "Доступ к сайту: ".$siteTitle,
+    ];
+    $roleId = $group->Add($arFields);
+    return $roleId;
 }
 
-// --- обычный вывод страницы ---
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
+// Создание нового сайта
+function createPortalSite($siteTitle, $siteCode) {
+    $IBLOCK_ID = getPortalIblockId();
+    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
 
-// создание нового сайта
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("AJAX")) {
-    $siteTitle  = trim($request->getPost("SITE_TITLE"));
-    $siteCode   = trim($request->getPost("SITE_CODE"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
+    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
+    if (!is_dir($sitesDir)) mkdir($sitesDir, 0755, true);
 
-    if ($siteTitle) {
-        $result = createPortalSite($siteTitle, $siteCode, $siteGroups, $siteUsers);
-        if (!empty($result["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
+    if ($siteCode === "") {
+        $siteCode = CUtil::translit($siteTitle, "ru", [
+            "replace_space" => "_",
+            "replace_other" => "_",
+            "change_case" => "L",
+        ]);
+    }
+    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
+
+    // создаём элемент инфоблока
+    $el = new CIBlockElement;
+    $arFields = [
+        "IBLOCK_ID" => $IBLOCK_ID,
+        "NAME" => $siteTitle,
+        "CODE" => $folderName,
+    ];
+    $id = $el->Add($arFields);
+    if (!$id) return ["error" => $el->LAST_ERROR];
+
+    // создаём группу-роль и записываем в свойство
+    $roleId = createSiteRole($siteTitle, $id);
+    CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
+
+    // создаём папку
+    $path = $sitesDir.$folderName;
+    if (!is_dir($path)) {
+        mkdir($path, 0755, true);
+        file_put_contents(
+            $path."/index.php",
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
+            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
+            "<h1>Добро пожаловать на $siteTitle</h1>\n".
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
+        );
+    }
+
+    return ["success" => true, "id" => $id, "code" => $folderName, "role" => $roleId];
+}
+
+// Получаем список сайтов с ролями
+function getPortalSites($userGroups) {
+    global $USER;
+    $IBLOCK_ID = getPortalIblockId();
+    if (!$IBLOCK_ID) return [];
+
+    $sites = [];
+    $res = CIBlockElement::GetList([], ["IBLOCK_ID" => $IBLOCK_ID], false, false, ["ID", "NAME", "CODE"]);
+    while ($ar = $res->GetNextElement()) {
+        $fields = $ar->GetFields();
+        $props  = $ar->GetProperties();
+
+        $fields["ROLE_ID"] = $props["SITE_ROLE"]["VALUE"];
+
+        // Проверка доступа: пользователь в группе-ролли
+        if (!$fields["ROLE_ID"] || in_array($fields["ROLE_ID"], $userGroups)) {
+            $sites[] = $fields;
         }
     }
+    return $sites;
 }
-
-// список сайтов
-$userGroups = $USER->GetUserGroupArray();
-$sites = getPortalSites($userGroups);
-?>
-
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
