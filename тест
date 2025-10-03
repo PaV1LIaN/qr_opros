@@ -1,25 +1,80 @@
-<?php global $USER; if ($USER->IsAdmin()): ?>
-<form method="post">
-    <?=bitrix_sessid_post()?>
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li style="margin-bottom: 20px;">
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank"><?=$site["NAME"]?></a>
 
-    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required style="min-width:320px;"><br><br>
-    <input type="text" name="SITE_CODE"  placeholder="Код сайта (латиница, если пусто — сгенерируется)" style="min-width:320px;"><br><br>
+        <?php if ($USER->IsAdmin() && (int)$site["ROLE_ID"]): ?>
+            <?php
+            // текущее состояние роли (красивые подписи)
+            $labels = [];
+            $rsU = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[(int)$site["ROLE_ID"]]]);
+            while ($u = $rsU->Fetch()) {
+                $labels[] = "✅ ".trim($u["NAME"]." ".$u["LAST_NAME"]);
+            }
+            ?>
+            <div id="access-view-<?=$site["ID"]?>" style="margin-left:20px;">
+                <strong>Пользователи:</strong> <?= $labels ? implode(", ", $labels) : "никто" ?>
+            </div>
 
-    <input type="text" name="ROLE_NAME"  placeholder="Название роли (например: Команда проекта Х)" required style="min-width:320px;"><br><br>
+            <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='block'">
+                Изменить доступ
+            </button>
 
-    <h3>Добавить пользователей в роль:</h3>
-    <select name="ROLE_USERS[]" multiple size="6" style="min-width:320px;">
-        <?php
-        $rsUsers = \CUser::GetList($by="id", $order="asc", ["ACTIVE"=>"Y"]);
-        while ($user = $rsUsers->Fetch()):
-            $label = trim($user["NAME"]." ".$user["LAST_NAME"]);
-            if ($label === "") $label = $user["LOGIN"];
-        ?>
-            <option value="<?=$user["ID"]?>"><?=$label?></option>
-        <?php endwhile; ?>
-    </select>
+            <div id="edit-<?=$site["ID"]?>" style="display:none; margin-top:10px;">
+                <form onsubmit="return updateAccess<?=$site["ID"]?>(this)">
+                    <input type="hidden" name="ROLE_ID" value="<?=$site["ROLE_ID"]?>">
 
-    <br><br>
-    <button type="submit">Создать сайт</button>
-</form>
-<?php endif; ?>
+                    <h4>Выберите пользователей:</h4>
+                    <select name="SITE_USERS[]" multiple size="6" style="min-width:320px;">
+                        <?php
+                        $rsAllUsers = \CUser::GetList($by="id", $order="asc", ["ACTIVE"=>"Y"]);
+                        // На пользователя в роли отметим selected
+                        $currentIds = [];
+                        $rsInRole = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[(int)$site["ROLE_ID"]]]);
+                        while ($uu = $rsInRole->Fetch()) { $currentIds[] = (int)$uu["ID"]; }
+
+                        while ($user = $rsAllUsers->Fetch()):
+                            $uid = (int)$user["ID"];
+                            $label = trim($user["NAME"]." ".$user["LAST_NAME"]);
+                            if ($label === "") $label = $user["LOGIN"];
+                            $selected = in_array($uid, $currentIds, true) ? "selected" : "";
+                        ?>
+                            <option value="<?=$uid?>" <?=$selected?>><?=$label?></option>
+                        <?php endwhile; ?>
+                    </select>
+
+                    <br><br>
+                    <button type="submit">Сохранить</button>
+                    <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='none'">Отмена</button>
+                </form>
+            </div>
+
+            <script>
+            function updateAccess<?=$site["ID"]?>(form) {
+                const formData = new FormData(form);
+                formData.append("AJAX", "UPDATE_ROLE");
+
+                fetch("<?=$APPLICATION->GetCurPage()?>", {
+                    method: "POST",
+                    body: formData,
+                    headers: { "X-Requested-With": "XMLHttpRequest" }
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        document.querySelector("#access-view-<?=$site["ID"]?>").innerHTML =
+                            "<strong>Пользователи:</strong> " + res.labels.join(", ");
+                        document.getElementById("edit-<?=$site["ID"]?>").style.display = "none";
+                    } else {
+                        alert("Ошибка сохранения");
+                    }
+                })
+                .catch(err => alert("AJAX error: " + err));
+                return false;
+            }
+            </script>
+        <?php endif; ?>
+    </li>
+<?php endforeach; ?>
+</ul>
