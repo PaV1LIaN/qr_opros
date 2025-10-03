@@ -1,3 +1,17 @@
+<?php
+use Bitrix\Main\Loader;
+
+Loader::includeModule("iblock");
+
+// Получаем ID инфоблока
+function getPortalIblockId() {
+    $iblockCode = "portal_sites";
+    $iblockType = "portal";
+
+    $iblockRes = CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType])->Fetch();
+    return $iblockRes ? $iblockRes["ID"] : false;
+}
+
 // Создание группы-ролли для сайта
 function createSiteRole($siteTitle, $siteId) {
     $group = new CGroup;
@@ -38,7 +52,7 @@ function createPortalSite($siteTitle, $siteCode) {
     $id = $el->Add($arFields);
     if (!$id) return ["error" => $el->LAST_ERROR];
 
-    // создаём группу-роль и записываем в свойство
+    // создаём группу-роль и сохраняем её ID
     $roleId = createSiteRole($siteTitle, $id);
     CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
 
@@ -58,7 +72,7 @@ function createPortalSite($siteTitle, $siteCode) {
     return ["success" => true, "id" => $id, "code" => $folderName, "role" => $roleId];
 }
 
-// Получаем список сайтов с ролями
+// Получаем список сайтов (с проверкой ролей)
 function getPortalSites($userGroups) {
     global $USER;
     $IBLOCK_ID = getPortalIblockId();
@@ -72,7 +86,7 @@ function getPortalSites($userGroups) {
 
         $fields["ROLE_ID"] = $props["SITE_ROLE"]["VALUE"];
 
-        // Проверка доступа: пользователь в группе-ролли
+        // доступ если пользователь в группе-ролли
         if (!$fields["ROLE_ID"] || in_array($fields["ROLE_ID"], $userGroups)) {
             $sites[] = $fields;
         }
