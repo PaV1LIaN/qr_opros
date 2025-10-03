@@ -1,80 +1,25 @@
-<?php
-use Bitrix\Main\Context;
-use PortalHub\Manager as PH;
+<?php global $USER; if ($USER->IsAdmin()): ?>
+<form method="post">
+    <?=bitrix_sessid_post()?>
 
-require_once $_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php";
-require_once __DIR__."/lib/functions.php";
+    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required style="min-width:320px;"><br><br>
+    <input type="text" name="SITE_CODE"  placeholder="Код сайта (латиница, если пусто — сгенерируется)" style="min-width:320px;"><br><br>
 
-global $USER;
-$request = Context::getCurrent()->getRequest();
+    <input type="text" name="ROLE_NAME"  placeholder="Название роли (например: Команда проекта Х)" required style="min-width:320px;"><br><br>
 
-/** ===== AJAX: обновление состава роли (пользователи) ===== */
-if ($USER->IsAdmin() && $request->getPost("AJAX") === "UPDATE_ROLE") {
-    $roleId = (int)$request->getPost("ROLE_ID");
-    $users  = $request->getPost("SITE_USERS") ?? [];
+    <h3>Добавить пользователей в роль:</h3>
+    <select name="ROLE_USERS[]" multiple size="6" style="min-width:320px;">
+        <?php
+        $rsUsers = \CUser::GetList($by="id", $order="asc", ["ACTIVE"=>"Y"]);
+        while ($user = $rsUsers->Fetch()):
+            $label = trim($user["NAME"]." ".$user["LAST_NAME"]);
+            if ($label === "") $label = $user["LOGIN"];
+        ?>
+            <option value="<?=$user["ID"]?>"><?=$label?></option>
+        <?php endwhile; ?>
+    </select>
 
-    if ($roleId > 0) {
-        // Добавляем выбранных пользователей в роль
-        foreach ($users as $userId) {
-            $userId = (int)$userId;
-            $userGroups = \CUser::GetUserGroup($userId);
-            if (!in_array($roleId, $userGroups, true)) {
-                $userGroups[] = $roleId;
-                \CUser::SetUserGroup($userId, $userGroups);
-            }
-        }
-        // Убираем из роли тех, кого сняли
-        $rs = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[$roleId]]);
-        while ($u = $rs->Fetch()) {
-            $uid = (int)$u["ID"];
-            if (!in_array($uid, array_map('intval',$users), true)) {
-                $ugs = \CUser::GetUserGroup($uid);
-                $ugs = array_diff($ugs, [$roleId]);
-                \CUser::SetUserGroup($uid, $ugs);
-            }
-        }
-
-        // Сформируем подписи для UI
-        $labels = [];
-        $rs2 = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[$roleId]]);
-        while ($u2 = $rs2->Fetch()) {
-            $labels[] = "✅ ".trim($u2["NAME"]." ".$u2["LAST_NAME"]);
-        }
-
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(["success"=>true, "labels" => $labels ?: ["никто"]]);
-        die();
-    }
-}
-
-/** ===== Обычный вывод страницы ===== */
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
-
-// Создание нового сайта
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("AJAX")) {
-    $siteTitle = trim((string)$request->getPost("SITE_TITLE"));
-    $siteCode  = trim((string)$request->getPost("SITE_CODE"));
-    $roleName  = trim((string)$request->getPost("ROLE_NAME"));
-    $roleUsers = $request->getPost("ROLE_USERS") ?? [];
-
-    if ($siteTitle !== "") {
-        $res = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
-        if (!empty($res["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".htmlspecialcharsbx($res["error"])."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"".htmlspecialcharsbx($siteTitle)."\" создан</pre>";
-        }
-    }
-}
-
-// Список доступных пользователю сайтов
-$userGroups = $USER->GetUserGroupArray();
-$sites = PH::getPortalSites($userGroups);
-?>
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
+    <br><br>
+    <button type="submit">Создать сайт</button>
+</form>
+<?php endif; ?>
