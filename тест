@@ -1,23 +1,63 @@
-<?php global $USER; if ($USER->IsAdmin()): ?>
-<form method="post">
-    <?=bitrix_sessid_post()?>
+function createPortalSite($siteTitle, $siteCode, $roleName = "", $roleUsers = []) {
+    $IBLOCK_ID = getPortalIblockId();
+    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
 
-    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required><br><br>
-    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)"><br><br>
+    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
+    if (!is_dir($sitesDir)) mkdir($sitesDir, 0755, true);
 
-    <input type="text" name="ROLE_NAME" placeholder="Название роли (например: Модераторы сайта)" required><br><br>
+    if ($siteCode === "") {
+        $siteCode = CUtil::translit($siteTitle, "ru", [
+            "replace_space" => "_",
+            "replace_other" => "_",
+            "change_case" => "L",
+        ]);
+    }
+    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
 
-    <h3>Добавить пользователей в роль:</h3>
-    <select name="ROLE_USERS[]" multiple size="5" style="min-width:250px;">
-        <?php
-        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
-        while ($user = $rsUsers->Fetch()):
-        ?>
-            <option value="<?=$user["ID"]?>"><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
-        <?php endwhile; ?>
-    </select>
+    // создаём элемент инфоблока
+    $el = new CIBlockElement;
+    $arFields = [
+        "IBLOCK_ID" => $IBLOCK_ID,
+        "NAME" => $siteTitle,
+        "CODE" => $folderName,
+    ];
+    $id = $el->Add($arFields);
+    if (!$id) return ["error" => $el->LAST_ERROR];
 
-    <br><br>
-    <button type="submit">Создать сайт</button>
-</form>
-<?php endif; ?>
+    // создаём группу-роль
+    $group = new CGroup;
+    $arRole = [
+        "ACTIVE" => "Y",
+        "C_SORT" => 100,
+        "STRING_ID" => "SITE_ROLE_".$id,
+        "NAME" => $roleName ?: "Доступ к сайту: ".$siteTitle,
+    ];
+    $roleId = $group->Add($arRole);
+
+    // добавляем выбранных пользователей в группу
+    foreach ($roleUsers as $userId) {
+        $userGroups = CUser::GetUserGroup($userId);
+        if (!in_array($roleId, $userGroups)) {
+            $userGroups[] = $roleId;
+            CUser::SetUserGroup($userId, $userGroups);
+        }
+    }
+
+    // сохраняем роль в инфоблоке
+    CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
+
+    // создаём папку
+    $path = $sitesDir.$folderName;
+    if (!is_dir($path)) {
+        mkdir($path, 0755, true);
+        file_put_contents(
+            $path."/index.php",
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
+            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
+            "<h1>Добро пожаловать на $siteTitle</h1>\n".
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
+        );
+    }
+
+    return ["success" => true, "id" => $id, "code" => $folderName, "role" => $roleId];
+}
