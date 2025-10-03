@@ -1,39 +1,42 @@
-function getPortalSites($userGroups) {
-    global $USER;
-    $IBLOCK_ID = getPortalIblockId();
-    if (!$IBLOCK_ID) return [];
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li style="margin-bottom: 15px;">
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?>
+        </a>
 
-    $sites = [];
-    $res = CIBlockElement::GetList(
-        ["ID" => "ASC"],
-        ["IBLOCK_ID" => $IBLOCK_ID],
-        false,
-        false,
-        ["ID", "NAME", "CODE", "DATE_CREATE"]
-    );
-    while ($ar = $res->GetNextElement()) {
-        $fields = $ar->GetFields();
-        $props  = $ar->GetProperties();
+        <?php if ($USER->IsAdmin()): ?>
+            <form method="post" style="display:inline-block; margin-left:20px;">
+                <?=bitrix_sessid_post()?>
+                <input type="hidden" name="UPDATE_SITE_ID" value="<?=$site["ID"]?>">
 
-        $allowedGroups = $props["USER_GROUPS"]["VALUE"]; 
-        $allowedUsers  = $props["USER_USERS"]["VALUE"]; 
+                <!-- выбор групп -->
+                <select name="SITE_GROUPS[]" multiple size="3">
+                    <?php
+                    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
+                    while ($group = $rsGroups->Fetch()):
+                        if ($group["ID"] == 1) continue; // не показываем админов
+                        $selected = in_array($group["ID"], $site["GROUPS"] ?? []) ? "selected" : "";
+                    ?>
+                        <option value="<?=$group["ID"]?>" <?=$selected?>><?=$group["NAME"]?></option>
+                    <?php endwhile; ?>
+                </select>
 
-        $fields["GROUPS"] = $allowedGroups;
-        $fields["USERS"]  = $allowedUsers;
+                <!-- выбор пользователей -->
+                <select name="SITE_USERS[]" multiple size="3">
+                    <?php
+                    $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
+                    while ($user = $rsUsers->Fetch()):
+                        $selected = in_array($user["ID"], $site["USERS"] ?? []) ? "selected" : "";
+                    ?>
+                        <option value="<?=$user["ID"]?>" <?=$selected?>><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
+                    <?php endwhile; ?>
+                </select>
 
-        $userId = $USER->GetID();
-
-        // доступ открыт, если:
-        // - группы пустые и пользователи пустые (свободный доступ)
-        // - пересечение по группам
-        // - пользователь явно указан
-        if (
-            (empty($allowedGroups) && empty($allowedUsers)) ||
-            array_intersect($allowedGroups, $userGroups) ||
-            in_array($userId, (array)$allowedUsers)
-        ) {
-            $sites[] = $fields;
-        }
-    }
-    return $sites;
-}
+                <button type="submit">Сохранить</button>
+            </form>
+        <?php endif; ?>
+    </li>
+<?php endforeach; ?>
+</ul>
