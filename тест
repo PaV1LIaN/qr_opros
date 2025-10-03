@@ -1,127 +1,132 @@
-Вот как можно привязать каждому автомобилю свой опрос и показывать уникальную статистику:
-
----
-
-## 1. Создаём веб-форму (опрос) в админке
-
-1. В административной панели сайта перейдите в **Контент → Веб-формы** (или «CRM-формы» в зависимости от вашей сборки).
-2. Нажмите **Добавить форму**.
-
-   * **Название**: «Опрос автомобиля»
-   * **Символьный код**: `survey_car`
-3. В полях формы создайте:
-
-   * Основные вопросы (например, «Оцените состояние автомобиля» и т.п.).
-   * Скрытое поле **ID автомобиля** (тип «Скрытое поле», код `CAR_ID`).
-
-> Запомните (или запишите) ID этой формы — далее в примерах будем считать, что это `$formId = 3`.
-
----
-
-## 2. Добавляем кнопку «Пройти опрос» в шаблон списка машин
-
-В вашем шаблоне `/local/templates/…/components/bitrix/news.list/cars_list/template.php` после вывода данных элемента добавьте:
-
-```php
-<a 
-  class="btn btn-primary" 
-  href="/cars/survey.php?CAR_ID=<?= $item['ID'] ?>"
->
-  Пройти опрос
-</a>
-```
-
-Теперь на каждой карточке будет ссылка вида
-
-```
-/cars/survey.php?CAR_ID=123
-```
-
-где `123` — ID конкретного элемента инфоблока.
-
----
-
-## 3. Создаём страницу опроса `/cars/survey.php`
-
-```php
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+$APPLICATION->SetTitle("Портал сайтов");
+
+use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
 
-Loader::includeModule("form");            // Модуль веб-форм
-Loader::includeModule("iblock");          // Модуль инфоблоков (если понадобятся данные о машине)
+Loader::includeModule("iblock");
 
-$carId  = intval($_REQUEST["CAR_ID"]);    // из URL
-$formId = 3;                              // замените на реальный ID формы
+// --- ищем инфоблок ---
+$iblockCode = "portal_sites"; 
+$iblockType = "portal";       
 
-$APPLICATION->SetTitle("Опрос для машины № ".$carId);
+$iblockRes = CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType])->Fetch();
+if ($iblockRes) {
+    $IBLOCK_ID = $iblockRes["ID"];
+} else {
+    die("<pre style='color:red'>Инфоблок portal_sites не найден.</pre>");
+}
 
-// 1) Компонент вывода формы
-$APPLICATION->IncludeComponent(
-  "bitrix:form.result.new",
-  "",
-  [
-    "WEB_FORM_ID"            => $formId,
-    "IGNORE_CUSTOM_TEMPLATE" => "Y",
-    "SEF_MODE"               => "N",
-    "SUCCESS_URL"            => "/cars/survey.php?CAR_ID={$carId}&show_stats=Y",
-    "VARIABLE_ALIASES"       => [],
-    "LIST_URL"               => "/cars/",
-    // Подставляем скрытое значение CAR_ID
-    "DEFAULT_FIELDS"         => [
-      "CAR_ID" => $carId
-    ],
-  ],
-  false
+// --- папка для сайтов ---
+$sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
+if (!is_dir($sitesDir)) {
+    mkdir($sitesDir, 0755, true);
+}
+
+$request = Context::getCurrent()->getRequest();
+
+// --- обработка формы ---
+if ($request->isPost() && check_bitrix_sessid()) {
+    $siteTitle = trim($request->getPost("SITE_TITLE")); // русское название
+    $siteCode  = trim($request->getPost("SITE_CODE"));  // английский код
+
+    if ($siteTitle !== "") {
+        // если код пустой → генерируем транслитом
+        if ($siteCode === "") {
+            $siteCode = CUtil::translit($siteTitle, "ru", [
+                "replace_space" => "_",
+                "replace_other" => "_",
+                "change_case" => "L",
+            ]);
+        }
+
+        // очищаем код
+        $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
+
+        // --- проверка на существование ---
+        $baseName = $folderName;
+        $counter = 2;
+
+        // проверяем инфоблок
+        while (CIBlockElement::GetList([], ["IBLOCK_ID" => $IBLOCK_ID, "CODE" => $folderName])->Fetch()) {
+            $folderName = $baseName . "_" . $counter;
+            $counter++;
+        }
+
+        // проверяем папку
+        while (is_dir($sitesDir . $folderName)) {
+            $folderName = $baseName . "_" . $counter;
+            $counter++;
+        }
+
+        // --- создаём элемент в инфоблоке ---
+        $el = new CIBlockElement;
+        $arFields = [
+            "IBLOCK_ID" => $IBLOCK_ID,
+            "NAME" => $siteTitle,   // русское название
+            "CODE" => $folderName,  // уникальный английский код
+        ];
+        $id = $el->Add($arFields);
+
+        if (!$id) {
+            echo "<pre style='color:red'>Ошибка инфоблока: ".$el->LAST_ERROR."</pre>";
+        } else {
+            // создаём папку
+            $path = $sitesDir.$folderName;
+            if (!is_dir($path)) {
+                mkdir($path, 0755, true);
+
+                // index.php
+                file_put_contents(
+                    $path."/index.php",
+                    "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
+                    "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
+                    "<h1>Добро пожаловать на $siteTitle</h1>\n".
+                    "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
+                );
+
+                mkdir($path."/css", 0755, true);
+                mkdir($path."/js", 0755, true);
+                mkdir($path."/img", 0755, true);
+            }
+            echo "<pre style='color:green'>Сайт \"$siteTitle\" создан (#$id), папка: $folderName</pre>";
+        }
+    }
+}
+
+// --- список сайтов ---
+$sites = [];
+$res = CIBlockElement::GetList(
+    ["ID" => "ASC"],
+    ["IBLOCK_ID" => $IBLOCK_ID],
+    false,
+    false,
+    ["ID", "NAME", "CODE"]
 );
+while ($ar = $res->GetNext()) {
+    $sites[] = $ar;
+}
+?>
 
-// 2) После успешной отправки (параметр show_stats=Y) — показываем статистику
-if ($_REQUEST["show_stats"] === "Y"):
+<h1>Портал сайтов</h1>
 
-  // Можно вывести общее число ответов
-  $rs = CFormResult::GetList(
-    $formId,
-    $by = "s_id",
-    $order = "asc",
-    ["CAR_ID" => $carId],
-    $isFiltered
-  );
-  $count = 0;
-  while ($rs->Fetch()) { $count++; }
-  echo "<p>Всего ответов: <strong>{$count}</strong></p>";
+<form method="post">
+    <?=bitrix_sessid_post()?>
+    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
+    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
+    <button type="submit">Создать сайт</button>
+</form>
 
-  // Или подключить компонент для детального списка/графиков
-  $APPLICATION->IncludeComponent(
-    "bitrix:form.result.list",
-    "",
-    [
-      "FORM_ID"       => $formId,
-      "FILTER"        => ["=PROPERTY_CAR_ID" => $carId],
-      "CHAIN_ITEM_LINK" => "",
-      "CHAIN_ITEM_TEXT" => "",
-      "AJAX_MODE"     => "Y",
-    ],
-    false
-  );
+<h2>Список сайтов</h2>
+<ul>
+<?foreach ($sites as $site):?>
+    <li>
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?> (<?=$site["CODE"]?>)
+        </a>
+    </li>
+<?endforeach;?>
+</ul>
 
-endif;
-
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
-```
-
-**Пояснения:**
-
-* При заходе на `/cars/survey.php?CAR_ID=…` пользователь увидит форму, где скрытое поле `CAR_ID` автоматически получит значение текущей машины.
-* После отправки его перенаправит на тот же URL с `&show_stats=Y` — и под формой появится статистика именно по этому `CAR_ID`.
-
----
-
-## 4. Итоговая навигация
-
-1. Пользователь на `/cars/index.php` видит список машин с кнопкой «Пройти опрос».
-2. Клик → `/cars/survey.php?CAR_ID=123` — форма опроса для машины № 123.
-3. После submit → `/cars/survey.php?CAR_ID=123&show_stats=Y` — форма + статистика ответов только по этой машине.
-
----
-
-Если нужно добавить более продвинутые графики или фильтрацию, можно подключить сторонние JS-библиотеки или расширить компонент `bitrix:form.result.list`. Дай знать, если нужна помощь с визуализацией!
+<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
