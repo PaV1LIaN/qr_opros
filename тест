@@ -1,120 +1,32 @@
-<?php
-use Bitrix\Main\Loader;
+<?php global $USER; if ($USER->IsAdmin()): ?>
+<form method="post">
+    <?=bitrix_sessid_post()?>
+    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
+    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
+    
+    <h3>Группы пользователей с доступом:</h3>
+    <?php
+    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
+    while ($group = $rsGroups->Fetch()):
+        if ($group["ID"] == 1) continue;
+    ?>
+        <label>
+            <input type="checkbox" name="SITE_GROUPS[]" value="<?=$group["ID"]?>">
+            <?=$group["NAME"]?>
+        </label><br>
+    <?php endwhile; ?>
 
-Loader::includeModule("iblock");
+    <h3>Пользователи с доступом:</h3>
+    <select name="SITE_USERS[]" multiple size="5">
+        <?php
+        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
+        while ($user = $rsUsers->Fetch()):
+        ?>
+            <option value="<?=$user["ID"]?>"><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
+        <?php endwhile; ?>
+    </select>
 
-// Получаем ID инфоблока
-function getPortalIblockId() {
-    $iblockCode = "portal_sites";
-    $iblockType = "portal";
-
-    $iblockRes = CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType])->Fetch();
-    return $iblockRes ? $iblockRes["ID"] : false;
-}
-
-// Создание нового сайта
-function createPortalSite($siteTitle, $siteCode, $siteGroups = [], $siteUsers = []) {
-    $IBLOCK_ID = getPortalIblockId();
-    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
-
-    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
-    if (!is_dir($sitesDir)) {
-        mkdir($sitesDir, 0755, true);
-    }
-
-    if ($siteCode === "") {
-        $siteCode = CUtil::translit($siteTitle, "ru", [
-            "replace_space" => "_",
-            "replace_other" => "_",
-            "change_case" => "L",
-        ]);
-    }
-
-    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
-
-    // защита от дублей
-    $baseName = $folderName;
-    $counter = 2;
-    while (CIBlockElement::GetList([], ["IBLOCK_ID" => $IBLOCK_ID, "CODE" => $folderName])->Fetch()) {
-        $folderName = $baseName . "_" . $counter;
-        $counter++;
-    }
-    while (is_dir($sitesDir . $folderName)) {
-        $folderName = $baseName . "_" . $counter;
-        $counter++;
-    }
-
-    // создаём элемент инфоблока
-    $el = new CIBlockElement;
-    $arFields = [
-        "IBLOCK_ID" => $IBLOCK_ID,
-        "NAME" => $siteTitle,
-        "CODE" => $folderName,
-    ];
-    $id = $el->Add($arFields);
-
-    if (!$id) return ["error" => $el->LAST_ERROR];
-
-    // сохраняем права
-    CIBlockElement::SetPropertyValuesEx($id, $IBLOCK_ID, [
-        "USER_GROUPS" => $siteGroups,
-        "USER_USERS"  => $siteUsers,
-    ]);
-
-    // создаём папки
-    $path = $sitesDir.$folderName;
-    if (!is_dir($path)) {
-        mkdir($path, 0755, true);
-
-        file_put_contents(
-            $path."/index.php",
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
-            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
-            "<h1>Добро пожаловать на $siteTitle</h1>\n".
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
-        );
-
-        mkdir($path."/css", 0755, true);
-        mkdir($path."/js", 0755, true);
-        mkdir($path."/img", 0755, true);
-    }
-
-    return ["success" => true, "id" => $id, "code" => $folderName];
-}
-
-// Получаем список сайтов
-function getPortalSites($userGroups) {
-    global $USER;
-    $IBLOCK_ID = getPortalIblockId();
-    if (!$IBLOCK_ID) return [];
-
-    $sites = [];
-    $res = CIBlockElement::GetList(
-        ["ID" => "ASC"],
-        ["IBLOCK_ID" => $IBLOCK_ID],
-        false,
-        false,
-        ["ID", "NAME", "CODE", "DATE_CREATE"]
-    );
-    while ($ar = $res->GetNextElement()) {
-        $fields = $ar->GetFields();
-        $props  = $ar->GetProperties();
-
-        $allowedGroups = $props["USER_GROUPS"]["VALUE"];
-        $allowedUsers  = $props["USER_USERS"]["VALUE"];
-
-        $fields["GROUPS"] = $allowedGroups;
-        $fields["USERS"]  = $allowedUsers;
-
-        $userId = $USER->GetID();
-
-        if (
-            (empty($allowedGroups) && empty($allowedUsers)) ||
-            array_intersect($allowedGroups, $userGroups) ||
-            in_array($userId, (array)$allowedUsers)
-        ) {
-            $sites[] = $fields;
-        }
-    }
-    return $sites;
-}
+    <br><br>
+    <button type="submit">Создать сайт</button>
+</form>
+<?php endif; ?>
