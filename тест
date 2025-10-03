@@ -1,21 +1,10 @@
-<?php global $USER; if ($USER->IsAdmin()): ?>
-<form method="post">
-    <?=bitrix_sessid_post()?>
-    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
-    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
-    
-    <h3>Группы пользователей с доступом:</h3>
-    <?php
-    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
-    while ($group = $rsGroups->Fetch()):
-        if ($group["ID"] == 1) continue; // пропускаем админов
-    ?>
-        <label>
-            <input type="checkbox" name="SITE_GROUPS[]" value="<?=$group["ID"]?>">
-            <?=$group["NAME"]?>
-        </label><br>
-    <?php endwhile; ?>
-    
-    <button type="submit">Создать сайт</button>
-</form>
-<?php endif; ?>
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li>
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?>
+        </a>
+    </li>
+<?php endforeach; ?>
+</ul>
