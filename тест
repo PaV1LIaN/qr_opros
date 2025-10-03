@@ -1,76 +1,23 @@
-<?php
-use Bitrix\Main\Context;
+<?php global $USER; if ($USER->IsAdmin()): ?>
+<form method="post">
+    <?=bitrix_sessid_post()?>
 
-require_once $_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php";
-require_once __DIR__."/lib/functions.php";
+    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required><br><br>
+    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)"><br><br>
 
-global $USER;
-$request = Context::getCurrent()->getRequest();
+    <input type="text" name="ROLE_NAME" placeholder="Название роли (например: Модераторы сайта)" required><br><br>
 
-// --- обновление пользователей роли ---
-if ($USER->IsAdmin() && $request->getPost("AJAX") === "UPDATE_ROLE") {
-    $roleId = intval($request->getPost("ROLE_ID"));
-    $users  = $request->getPost("SITE_USERS") ?? [];
+    <h3>Добавить пользователей в роль:</h3>
+    <select name="ROLE_USERS[]" multiple size="5" style="min-width:250px;">
+        <?php
+        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
+        while ($user = $rsUsers->Fetch()):
+        ?>
+            <option value="<?=$user["ID"]?>"><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
+        <?php endwhile; ?>
+    </select>
 
-    if ($roleId) {
-        // добавляем выбранных пользователей
-        foreach ($users as $userId) {
-            $userGroups = CUser::GetUserGroup($userId);
-            if (!in_array($roleId, $userGroups)) {
-                $userGroups[] = $roleId;
-                CUser::SetUserGroup($userId, $userGroups);
-            }
-        }
-
-        // убираем тех, кого сняли
-        $rsUsers = CUser::GetList($by="id", $order="asc", ["GROUPS_ID" => [$roleId]]);
-        while ($u = $rsUsers->Fetch()) {
-            if (!in_array($u["ID"], $users)) {
-                $userGroups = CUser::GetUserGroup($u["ID"]);
-                $userGroups = array_diff($userGroups, [$roleId]);
-                CUser::SetUserGroup($u["ID"], $userGroups);
-            }
-        }
-
-        // собираем список
-        $labels = [];
-        $rsUsers = CUser::GetList($by="id", $order="asc", ["GROUPS_ID" => [$roleId]]);
-        while ($u = $rsUsers->Fetch()) {
-            $labels[] = "✅ ".$u["NAME"]." ".$u["LAST_NAME"];
-        }
-
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(["success" => true, "labels" => $labels ?: ["никто"]]);
-        die();
-    }
-}
-
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
-
-// создание нового сайта
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("AJAX")) {
-    $siteTitle  = trim($request->getPost("SITE_TITLE"));
-    $siteCode   = trim($request->getPost("SITE_CODE"));
-
-    if ($siteTitle) {
-        $result = createPortalSite($siteTitle, $siteCode);
-        if (!empty($result["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
-        }
-    }
-}
-
-// список сайтов
-$userGroups = $USER->GetUserGroupArray();
-$sites = getPortalSites($userGroups);
-?>
-
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
+    <br><br>
+    <button type="submit">Создать сайт</button>
+</form>
+<?php endif; ?>
