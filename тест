@@ -1,55 +1,78 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li style="margin-bottom: 15px;">
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?>
+        </a>
 
-global $USER;
-use Bitrix\Main\Context;
+        <?php if ($USER->IsAdmin()): ?>
+            <!-- показываем текущие доступы -->
+            <div style="margin-left:20px;">
+                <strong>Доступ:</strong>
+                <?php
+                $accessLabels = [];
 
-require_once __DIR__."/lib/functions.php";
+                // Группы
+                if (!empty($site["GROUPS"])) {
+                    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", ["ID" => implode("|", $site["GROUPS"])]);
+                    while ($group = $rsGroups->Fetch()) {
+                        $accessLabels[] = "✅ ".$group["NAME"];
+                    }
+                }
 
-$request = Context::getCurrent()->getRequest();
+                // Пользователи
+                if (!empty($site["USERS"])) {
+                    $rsUsers = CUser::GetList($by="id", $order="asc", ["ID" => implode("|", $site["USERS"])]);
+                    while ($user = $rsUsers->Fetch()) {
+                        $accessLabels[] = "✅ ".$user["NAME"]." ".$user["LAST_NAME"];
+                    }
+                }
 
-// Создание нового сайта
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("UPDATE_SITE_ID")) {
-    $siteTitle = trim($request->getPost("SITE_TITLE"));
-    $siteCode  = trim($request->getPost("SITE_CODE"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
+                echo $accessLabels ? implode(", ", $accessLabels) : "Нет ограничений (доступ для всех)";
+                ?>
+            </div>
 
-    if ($siteTitle) {
-        $result = createPortalSite($siteTitle, $siteCode, $siteGroups, $siteUsers);
-        if (!empty($result["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
-        }
-    }
-}
+            <!-- кнопка показать форму -->
+            <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='block'">
+                Изменить доступ
+            </button>
 
-// Обновление прав доступа
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && $request->getPost("UPDATE_SITE_ID")) {
-    $siteId = intval($request->getPost("UPDATE_SITE_ID"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
+            <!-- скрытая форма -->
+            <div id="edit-<?=$site["ID"]?>" style="display:none; margin-top:10px;">
+                <form method="post">
+                    <?=bitrix_sessid_post()?>
+                    <input type="hidden" name="UPDATE_SITE_ID" value="<?=$site["ID"]?>">
 
-    $IBLOCK_ID = getPortalIblockId();
-    if ($IBLOCK_ID && $siteId) {
-        CIBlockElement::SetPropertyValuesEx($siteId, $IBLOCK_ID, [
-            "USER_GROUPS" => $siteGroups,
-            "USER_USERS"  => $siteUsers
-        ]);
-        echo "<pre style='color:green'>Права доступа для сайта #$siteId обновлены</pre>";
-    }
-}
+                    <h4>Группы:</h4>
+                    <select name="SITE_GROUPS[]" multiple size="3">
+                        <?php
+                        $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
+                        while ($group = $rsGroups->Fetch()):
+                            if ($group["ID"] == 1) continue;
+                            $selected = in_array($group["ID"], $site["GROUPS"] ?? []) ? "selected" : "";
+                        ?>
+                            <option value="<?=$group["ID"]?>" <?=$selected?>><?=$group["NAME"]?></option>
+                        <?php endwhile; ?>
+                    </select>
 
-// Получение списка сайтов с учётом прав
-$userGroups = $USER->GetUserGroupArray();
-$sites = getPortalSites($userGroups);
-?>
+                    <h4>Пользователи:</h4>
+                    <select name="SITE_USERS[]" multiple size="3">
+                        <?php
+                        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
+                        while ($user = $rsUsers->Fetch()):
+                            $selected = in_array($user["ID"], $site["USERS"] ?? []) ? "selected" : "";
+                        ?>
+                            <option value="<?=$user["ID"]?>" <?=$selected?>><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
+                        <?php endwhile; ?>
+                    </select>
 
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
+                    <br><br>
+                    <button type="submit">Сохранить</button>
+                    <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='none'">Отмена</button>
+                </form>
+            </div>
+        <?php endif; ?>
+    </li>
+<?php endforeach; ?>
+</ul>
