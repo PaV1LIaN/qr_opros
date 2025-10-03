@@ -1,63 +1,16 @@
-function createPortalSite($siteTitle, $siteCode, $roleName = "", $roleUsers = []) {
-    $IBLOCK_ID = getPortalIblockId();
-    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
+// создание нового сайта
+if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("AJAX")) {
+    $siteTitle = trim($request->getPost("SITE_TITLE"));
+    $siteCode  = trim($request->getPost("SITE_CODE"));
+    $roleName  = trim($request->getPost("ROLE_NAME"));
+    $roleUsers = $request->getPost("ROLE_USERS") ?? [];
 
-    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
-    if (!is_dir($sitesDir)) mkdir($sitesDir, 0755, true);
-
-    if ($siteCode === "") {
-        $siteCode = CUtil::translit($siteTitle, "ru", [
-            "replace_space" => "_",
-            "replace_other" => "_",
-            "change_case" => "L",
-        ]);
-    }
-    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
-
-    // создаём элемент инфоблока
-    $el = new CIBlockElement;
-    $arFields = [
-        "IBLOCK_ID" => $IBLOCK_ID,
-        "NAME" => $siteTitle,
-        "CODE" => $folderName,
-    ];
-    $id = $el->Add($arFields);
-    if (!$id) return ["error" => $el->LAST_ERROR];
-
-    // создаём группу-роль
-    $group = new CGroup;
-    $arRole = [
-        "ACTIVE" => "Y",
-        "C_SORT" => 100,
-        "STRING_ID" => "SITE_ROLE_".$id,
-        "NAME" => $roleName ?: "Доступ к сайту: ".$siteTitle,
-    ];
-    $roleId = $group->Add($arRole);
-
-    // добавляем выбранных пользователей в группу
-    foreach ($roleUsers as $userId) {
-        $userGroups = CUser::GetUserGroup($userId);
-        if (!in_array($roleId, $userGroups)) {
-            $userGroups[] = $roleId;
-            CUser::SetUserGroup($userId, $userGroups);
+    if ($siteTitle) {
+        $result = createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
+        if (!empty($result["error"])) {
+            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
+        } else {
+            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан, роль: {$roleName}</pre>";
         }
     }
-
-    // сохраняем роль в инфоблоке
-    CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
-
-    // создаём папку
-    $path = $sitesDir.$folderName;
-    if (!is_dir($path)) {
-        mkdir($path, 0755, true);
-        file_put_contents(
-            $path."/index.php",
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
-            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
-            "<h1>Добро пожаловать на $siteTitle</h1>\n".
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
-        );
-    }
-
-    return ["success" => true, "id" => $id, "code" => $folderName, "role" => $roleId];
 }
