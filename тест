@@ -1,63 +1,117 @@
-function createPortalSite($siteTitle, $siteCode, $roleName = "", $roleUsers = []) {
-    $IBLOCK_ID = getPortalIblockId();
-    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
+<?php
+namespace PortalHub;
 
-    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
-    if (!is_dir($sitesDir)) mkdir($sitesDir, 0755, true);
+use Bitrix\Main\Loader;
 
-    if ($siteCode === "") {
-        $siteCode = CUtil::translit($siteTitle, "ru", [
-            "replace_space" => "_",
-            "replace_other" => "_",
-            "change_case" => "L",
+Loader::includeModule("iblock");
+
+class Manager
+{
+    public static function getPortalIblockId()
+    {
+        $iblockCode = "portal_sites";
+        $iblockType = "portal";
+        $ib = \CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType])->Fetch();
+        return $ib ? (int)$ib["ID"] : 0;
+    }
+
+    /** Создать битриксовую группу (роль) для сайта */
+    public static function createSiteRole(string $siteTitle, int $siteId): int
+    {
+        $group = new \CGroup();
+        $roleId = $group->Add([
+            "ACTIVE"    => "Y",
+            "C_SORT"    => 100,
+            "STRING_ID" => "SITE_ROLE_".$siteId,
+            "NAME"      => ($siteTitle ? "Доступ к сайту: ".$siteTitle : "Доступ к сайту #".$siteId),
         ]);
+        return (int)$roleId;
     }
-    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
 
-    // создаём элемент инфоблока
-    $el = new CIBlockElement;
-    $arFields = [
-        "IBLOCK_ID" => $IBLOCK_ID,
-        "NAME" => $siteTitle,
-        "CODE" => $folderName,
-    ];
-    $id = $el->Add($arFields);
-    if (!$id) return ["error" => $el->LAST_ERROR];
+    /** Создать сайт + роль; можно сразу задать имя роли и пользователей роли */
+    public static function createPortalSite(string $siteTitle, string $siteCode = "", string $roleName = "", array $roleUsers = []): array
+    {
+        $IBLOCK_ID = self::getPortalIblockId();
+        if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
 
-    // создаём группу-роль
-    $group = new CGroup;
-    $arRole = [
-        "ACTIVE" => "Y",
-        "C_SORT" => 100,
-        "STRING_ID" => "SITE_ROLE_".$id,
-        "NAME" => $roleName ?: "Доступ к сайту: ".$siteTitle,
-    ];
-    $roleId = $group->Add($arRole);
+        $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
+        if (!is_dir($sitesDir)) @mkdir($sitesDir, 0755, true);
 
-    // добавляем выбранных пользователей в группу
-    foreach ($roleUsers as $userId) {
-        $userGroups = CUser::GetUserGroup($userId);
-        if (!in_array($roleId, $userGroups)) {
-            $userGroups[] = $roleId;
-            CUser::SetUserGroup($userId, $userGroups);
+        // код папки
+        if ($siteCode === "") {
+            $siteCode = \CUtil::translit($siteTitle, "ru", ["replace_space"=>"_","replace_other"=>"_","change_case"=>"L"]);
         }
+        $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
+
+        // создаём элемент инфоблока
+        $el = new \CIBlockElement;
+        $id = $el->Add([
+            "IBLOCK_ID" => $IBLOCK_ID,
+            "NAME"      => $siteTitle,
+            "CODE"      => $folderName,
+        ]);
+        if (!$id) return ["error" => $el->LAST_ERROR];
+        $id = (int)$id;
+
+        // создаём роль (группу)
+        $group = new \CGroup();
+        $roleId = $group->Add([
+            "ACTIVE"    => "Y",
+            "C_SORT"    => 100,
+            "STRING_ID" => "SITE_ROLE_".$id,
+            "NAME"      => ($roleName ?: "Доступ к сайту: ".$siteTitle),
+        ]);
+        $roleId = (int)$roleId;
+
+        // добавим выбранных пользователей в роль
+        if ($roleId && !empty($roleUsers)) {
+            foreach ($roleUsers as $userId) {
+                $userId = (int)$userId;
+                $userGroups = \CUser::GetUserGroup($userId);
+                if (!in_array($roleId, $userGroups)) {
+                    $userGroups[] = $roleId;
+                    \CUser::SetUserGroup($userId, $userGroups);
+                }
+            }
+        }
+
+        // сохраним ID роли в свойство SITE_ROLE
+        \CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
+
+        // создадим папку сайта
+        $path = $sitesDir.$folderName;
+        if (!is_dir($path)) {
+            @mkdir($path, 0755, true);
+            file_put_contents(
+                $path."/index.php",
+                "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
+                "\$APPLICATION->SetTitle('".addslashes($siteTitle)."');\n?>\n".
+                "<h1>Добро пожаловать на ".htmlspecialcharsbx($siteTitle)."</h1>\n".
+                "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
+            );
+        }
+
+        return ["success"=>true, "id"=>$id, "code"=>$folderName, "role"=>$roleId];
     }
 
-    // сохраняем роль в инфоблоке
-    CIBlockElement::SetPropertyValues($id, $IBLOCK_ID, ["SITE_ROLE" => $roleId]);
+    /** Получить список сайтов, видимых пользователю (по роли) */
+    public static function getPortalSites(array $userGroups): array
+    {
+        $IBLOCK_ID = self::getPortalIblockId();
+        if (!$IBLOCK_ID) return [];
 
-    // создаём папку
-    $path = $sitesDir.$folderName;
-    if (!is_dir($path)) {
-        mkdir($path, 0755, true);
-        file_put_contents(
-            $path."/index.php",
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
-            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
-            "<h1>Добро пожаловать на $siteTitle</h1>\n".
-            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
-        );
+        $sites = [];
+        $res = \CIBlockElement::GetList([], ["IBLOCK_ID"=>$IBLOCK_ID], false, false, ["ID","NAME","CODE"]);
+        while ($el = $res->GetNextElement()) {
+            $f = $el->GetFields();
+            $p = $el->GetProperties();
+            $roleId = (int)$p["SITE_ROLE"]["VALUE"];
+            $f["ROLE_ID"] = $roleId;
+            // доступ есть, если роль не задана или пользователь состоит в роли
+            if (!$roleId || in_array($roleId, $userGroups, true)) {
+                $sites[] = $f;
+            }
+        }
+        return $sites;
     }
-
-    return ["success" => true, "id" => $id, "code" => $folderName, "role" => $roleId];
 }
