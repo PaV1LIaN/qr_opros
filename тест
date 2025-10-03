@@ -1,38 +1,30 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li style="margin-bottom: 10px;">
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?>
+        </a>
 
-global $USER;
-use Bitrix\Main\Context;
-
-require_once __DIR__."/lib/functions.php";
-
-$request = Context::getCurrent()->getRequest();
-
-// обработка формы
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid()) {
-    $siteTitle = trim($request->getPost("SITE_TITLE"));
-    $siteCode  = trim($request->getPost("SITE_CODE"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-
-    if ($siteTitle) {
-        $result = createPortalSite($siteTitle, $siteCode, $siteGroups);
-        if (!empty($result["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
-        }
-    }
-}
-
-// получаем список сайтов с учётом прав
-$userGroups = $USER->GetUserGroupArray();
-$sites = getPortalSites($userGroups);
-?>
-
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
+        <?php if ($USER->IsAdmin()): ?>
+            <!-- форма изменения доступа -->
+            <form method="post" style="display:inline-block; margin-left:20px;">
+                <?=bitrix_sessid_post()?>
+                <input type="hidden" name="UPDATE_SITE_ID" value="<?=$site["ID"]?>">
+                
+                <select name="SITE_GROUPS[]" multiple size="3">
+                    <?php
+                    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
+                    while ($group = $rsGroups->Fetch()):
+                        if ($group["ID"] == 1) continue; // не показываем админов
+                        $selected = in_array($group["ID"], $site["GROUPS"] ?? []) ? "selected" : "";
+                    ?>
+                        <option value="<?=$group["ID"]?>" <?=$selected?>><?=$group["NAME"]?></option>
+                    <?php endwhile; ?>
+                </select>
+                <button type="submit">Сохранить</button>
+            </form>
+        <?php endif; ?>
+    </li>
+<?php endforeach; ?>
+</ul>
