@@ -1,6 +1,7 @@
 <?php
-// Подключаем Select2 (если не подключено на форме создания сайта)
+// Подключаем jQuery и Select2
 ?>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 
@@ -14,7 +15,7 @@
 
         <?php if ($USER->IsAdmin() && (int)$site["ROLE_ID"]): ?>
             <?php
-            // Получаем текущих пользователей роли
+            // Текущие пользователи роли
             $labels = [];
             $currentIds = [];
             $rsU = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[(int)$site["ROLE_ID"]]]);
@@ -56,8 +57,8 @@
             </div>
 
             <script>
-            // Инициализация Select2 для конкретного сайта
-            document.addEventListener("DOMContentLoaded", function() {
+            $(document).ready(function() {
+                // инициализация Select2 для конкретного списка
                 $("#user-select-<?=$site["ID"]?>").select2({
                     placeholder: "Выберите пользователей",
                     allowClear: true,
