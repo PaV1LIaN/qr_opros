@@ -15,7 +15,7 @@ $iblockRes = CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType]
 if ($iblockRes) {
     $IBLOCK_ID = $iblockRes["ID"];
 } else {
-    die("<pre style='color:red'>Инфоблок portal_sites не найден.</pre>");
+    die("<pre style='color:red'>Инфоблок portal_sites не найден. Создайте его в админке.</pre>");
 }
 
 // --- папка для сайтов ---
@@ -26,8 +26,9 @@ if (!is_dir($sitesDir)) {
 
 $request = Context::getCurrent()->getRequest();
 
-// --- обработка формы ---
-if ($request->isPost() && check_bitrix_sessid()) {
+// --- обработка формы (только для админов) ---
+global $USER;
+if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid()) {
     $siteTitle = trim($request->getPost("SITE_TITLE")); // русское название
     $siteCode  = trim($request->getPost("SITE_CODE"));  // английский код
 
@@ -44,7 +45,7 @@ if ($request->isPost() && check_bitrix_sessid()) {
         // очищаем код
         $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
 
-        // --- проверка на существование ---
+        // --- проверка на дубли ---
         $baseName = $folderName;
         $counter = 2;
 
@@ -69,9 +70,7 @@ if ($request->isPost() && check_bitrix_sessid()) {
         ];
         $id = $el->Add($arFields);
 
-        if (!$id) {
-            echo "<pre style='color:red'>Ошибка инфоблока: ".$el->LAST_ERROR."</pre>";
-        } else {
+        if ($id) {
             // создаём папку
             $path = $sitesDir.$folderName;
             if (!is_dir($path)) {
@@ -90,7 +89,9 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 mkdir($path."/js", 0755, true);
                 mkdir($path."/img", 0755, true);
             }
-            echo "<pre style='color:green'>Сайт \"$siteTitle\" создан (#$id), папка: $folderName</pre>";
+            echo "<pre style='color:green'>Сайт \"$siteTitle\" создан (#$id)</pre>";
+        } else {
+            echo "<pre style='color:red'>Ошибка инфоблока: ".$el->LAST_ERROR."</pre>";
         }
     }
 }
@@ -102,7 +103,7 @@ $res = CIBlockElement::GetList(
     ["IBLOCK_ID" => $IBLOCK_ID],
     false,
     false,
-    ["ID", "NAME", "CODE"]
+    ["ID", "NAME", "CODE", "DATE_CREATE"]
 );
 while ($ar = $res->GetNext()) {
     $sites[] = $ar;
@@ -111,19 +112,23 @@ while ($ar = $res->GetNext()) {
 
 <h1>Портал сайтов</h1>
 
-<form method="post">
-    <?=bitrix_sessid_post()?>
-    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
-    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
-    <button type="submit">Создать сайт</button>
-</form>
+<?if ($USER->IsAdmin()):?>
+    <form method="post">
+        <?=bitrix_sessid_post()?>
+        <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
+        <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
+        <button type="submit">Создать сайт</button>
+    </form>
+<?else:?>
+    <p style="color:red">У вас нет прав для создания сайтов</p>
+<?endif;?>
 
 <h2>Список сайтов</h2>
 <ul>
 <?foreach ($sites as $site):?>
     <li>
         <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
-            <?=$site["NAME"]?> (<?=$site["CODE"]?>)
+            <?=$site["NAME"]?>
         </a>
     </li>
 <?endforeach;?>
