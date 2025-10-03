@@ -1,32 +1,102 @@
-<?php global $USER; if ($USER->IsAdmin()): ?>
-<form method="post">
-    <?=bitrix_sessid_post()?>
-    <input type="text" name="SITE_TITLE" placeholder="Название сайта (русское)" required>
-    <input type="text" name="SITE_CODE" placeholder="Код сайта (латиница, если пусто — сгенерируется)">
-    
-    <h3>Группы пользователей с доступом:</h3>
-    <?php
-    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
-    while ($group = $rsGroups->Fetch()):
-        if ($group["ID"] == 1) continue;
-    ?>
-        <label>
-            <input type="checkbox" name="SITE_GROUPS[]" value="<?=$group["ID"]?>">
-            <?=$group["NAME"]?>
-        </label><br>
-    <?php endwhile; ?>
+<h2>Список сайтов</h2>
+<ul>
+<?php foreach ($sites as $site): ?>
+    <li style="margin-bottom: 15px;">
+        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
+            <?=$site["NAME"]?>
+        </a>
 
-    <h3>Пользователи с доступом:</h3>
-    <select name="SITE_USERS[]" multiple size="5">
-        <?php
-        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
-        while ($user = $rsUsers->Fetch()):
-        ?>
-            <option value="<?=$user["ID"]?>"><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
-        <?php endwhile; ?>
-    </select>
+        <?php if ($USER->IsAdmin()): ?>
+            <div id="access-view-<?=$site["ID"]?>" style="margin-left:20px;">
+                <strong>Доступ:</strong>
+                <?php
+                $accessLabels = [];
 
-    <br><br>
-    <button type="submit">Создать сайт</button>
-</form>
-<?php endif; ?>
+                if (!empty($site["GROUPS"])) {
+                    $rsGroups = CGroup::GetList($by="c_sort", $order="asc", ["ID" => implode("|", $site["GROUPS"])]);
+                    while ($group = $rsGroups->Fetch()) {
+                        $accessLabels[] = "✅ ".$group["NAME"];
+                    }
+                }
+
+                if (!empty($site["USERS"])) {
+                    $rsUsers = CUser::GetList($by="id", $order="asc", ["ID" => implode("|", $site["USERS"])]);
+                    while ($user = $rsUsers->Fetch()) {
+                        $accessLabels[] = "✅ ".$user["NAME"]." ".$user["LAST_NAME"];
+                    }
+                }
+
+                echo $accessLabels ? implode(", ", $accessLabels) : "Нет ограничений (доступ для всех)";
+                ?>
+            </div>
+
+            <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='block'">
+                Изменить доступ
+            </button>
+
+            <div id="edit-<?=$site["ID"]?>" style="display:none; margin-top:10px;">
+                <form onsubmit="return updateAccess<?=$site["ID"]?>(this)">
+                    <input type="hidden" name="SITE_ID" value="<?=$site["ID"]?>">
+
+                    <h4>Группы:</h4>
+                    <select name="SITE_GROUPS[]" multiple size="3">
+                        <?php
+                        $rsGroups = CGroup::GetList($by="c_sort", $order="asc", []);
+                        while ($group = $rsGroups->Fetch()):
+                            if ($group["ID"] == 1) continue;
+                            $selected = in_array($group["ID"], $site["GROUPS"] ?? []) ? "selected" : "";
+                        ?>
+                            <option value="<?=$group["ID"]?>" <?=$selected?>><?=$group["NAME"]?></option>
+                        <?php endwhile; ?>
+                    </select>
+
+                    <h4>Пользователи:</h4>
+                    <select name="SITE_USERS[]" multiple size="3">
+                        <?php
+                        $rsUsers = CUser::GetList($by="id", $order="asc", ["ACTIVE" => "Y"]);
+                        while ($user = $rsUsers->Fetch()):
+                            $selected = in_array($user["ID"], $site["USERS"] ?? []) ? "selected" : "";
+                        ?>
+                            <option value="<?=$user["ID"]?>" <?=$selected?>><?=$user["NAME"]?> <?=$user["LAST_NAME"]?></option>
+                        <?php endwhile; ?>
+                    </select>
+
+                    <br><br>
+                    <button type="submit">Сохранить</button>
+                    <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='none'">Отмена</button>
+                </form>
+            </div>
+
+            <script>
+            function updateAccess<?=$site["ID"]?>(form) {
+                let formData = new FormData(form);
+                formData.append("AJAX", "UPDATE_ACCESS");
+
+                fetch("<?=$APPLICATION->GetCurPage()?>", {
+                    method: "POST",
+                    body: formData,
+                    headers: { "X-Requested-With": "XMLHttpRequest" }
+                })
+                .then(response => response.text())
+                .then(text => {
+                    console.log("Ответ сервера:", text); // отладка
+                    let result = JSON.parse(text);
+                    if (result.success) {
+                        document.querySelector("#access-view-<?=$site["ID"]?>").innerHTML =
+                            "<strong>" + result.message + "</strong>";
+                        document.getElementById("edit-<?=$site["ID"]?>").style.display = "none";
+                    } else {
+                        alert("Ошибка: " + (result.message || "Не удалось обновить доступ"));
+                    }
+                })
+                .catch(err => {
+                    alert("Ошибка AJAX: " + err);
+                });
+
+                return false;
+            }
+            </script>
+        <?php endif; ?>
+    </li>
+<?php endforeach; ?>
+</ul>
