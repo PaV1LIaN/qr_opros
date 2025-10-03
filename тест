@@ -1,61 +1,120 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Портал сайтов");
+use Bitrix\Main\Loader;
 
-global $USER;
-use Bitrix\Main\Context;
+Loader::includeModule("iblock");
 
-require_once __DIR__."/lib/functions.php";
+// Получаем ID инфоблока
+function getPortalIblockId() {
+    $iblockCode = "portal_sites";
+    $iblockType = "portal";
 
-$request = Context::getCurrent()->getRequest();
-
-// --- обработка AJAX обновления прав доступа ---
-if ($USER->IsAdmin() && $request->getPost("AJAX") === "UPDATE_ACCESS") {
-    $siteId = intval($request->getPost("SITE_ID"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
-
-    $IBLOCK_ID = getPortalIblockId();
-    if ($IBLOCK_ID && $siteId) {
-        CIBlockElement::SetPropertyValuesEx($siteId, $IBLOCK_ID, [
-            "USER_GROUPS" => $siteGroups,
-            "USER_USERS"  => $siteUsers
-        ]);
-
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode([
-            "success" => true,
-            "message" => "Права доступа для сайта #$siteId обновлены"
-        ]);
-        die();
-    }
+    $iblockRes = CIBlock::GetList([], ["CODE" => $iblockCode, "TYPE" => $iblockType])->Fetch();
+    return $iblockRes ? $iblockRes["ID"] : false;
 }
 
-// --- создание нового сайта ---
-if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid() && !$request->getPost("AJAX")) {
-    $siteTitle  = trim($request->getPost("SITE_TITLE"));
-    $siteCode   = trim($request->getPost("SITE_CODE"));
-    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
-    $siteUsers  = $request->getPost("SITE_USERS") ?? [];
+// Создание нового сайта
+function createPortalSite($siteTitle, $siteCode, $siteGroups = [], $siteUsers = []) {
+    $IBLOCK_ID = getPortalIblockId();
+    if (!$IBLOCK_ID) return ["error" => "Инфоблок portal_sites не найден"];
 
-    if ($siteTitle) {
-        $result = createPortalSite($siteTitle, $siteCode, $siteGroups, $siteUsers);
-        if (!empty($result["error"])) {
-            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
-        } else {
-            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
+    $sitesDir = $_SERVER["DOCUMENT_ROOT"]."/local/portal_hub/sites/";
+    if (!is_dir($sitesDir)) {
+        mkdir($sitesDir, 0755, true);
+    }
+
+    if ($siteCode === "") {
+        $siteCode = CUtil::translit($siteTitle, "ru", [
+            "replace_space" => "_",
+            "replace_other" => "_",
+            "change_case" => "L",
+        ]);
+    }
+
+    $folderName = preg_replace('/[^a-z0-9_-]/', '', strtolower($siteCode));
+
+    // защита от дублей
+    $baseName = $folderName;
+    $counter = 2;
+    while (CIBlockElement::GetList([], ["IBLOCK_ID" => $IBLOCK_ID, "CODE" => $folderName])->Fetch()) {
+        $folderName = $baseName . "_" . $counter;
+        $counter++;
+    }
+    while (is_dir($sitesDir . $folderName)) {
+        $folderName = $baseName . "_" . $counter;
+        $counter++;
+    }
+
+    // создаём элемент инфоблока
+    $el = new CIBlockElement;
+    $arFields = [
+        "IBLOCK_ID" => $IBLOCK_ID,
+        "NAME" => $siteTitle,
+        "CODE" => $folderName,
+    ];
+    $id = $el->Add($arFields);
+
+    if (!$id) return ["error" => $el->LAST_ERROR];
+
+    // сохраняем права
+    CIBlockElement::SetPropertyValuesEx($id, $IBLOCK_ID, [
+        "USER_GROUPS" => $siteGroups,
+        "USER_USERS"  => $siteUsers,
+    ]);
+
+    // создаём папки
+    $path = $sitesDir.$folderName;
+    if (!is_dir($path)) {
+        mkdir($path, 0755, true);
+
+        file_put_contents(
+            $path."/index.php",
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');\n".
+            "\$APPLICATION->SetTitle('$siteTitle');\n?>\n".
+            "<h1>Добро пожаловать на $siteTitle</h1>\n".
+            "<?php\nrequire(\$_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');\n?>"
+        );
+
+        mkdir($path."/css", 0755, true);
+        mkdir($path."/js", 0755, true);
+        mkdir($path."/img", 0755, true);
+    }
+
+    return ["success" => true, "id" => $id, "code" => $folderName];
+}
+
+// Получаем список сайтов
+function getPortalSites($userGroups) {
+    global $USER;
+    $IBLOCK_ID = getPortalIblockId();
+    if (!$IBLOCK_ID) return [];
+
+    $sites = [];
+    $res = CIBlockElement::GetList(
+        ["ID" => "ASC"],
+        ["IBLOCK_ID" => $IBLOCK_ID],
+        false,
+        false,
+        ["ID", "NAME", "CODE", "DATE_CREATE"]
+    );
+    while ($ar = $res->GetNextElement()) {
+        $fields = $ar->GetFields();
+        $props  = $ar->GetProperties();
+
+        $allowedGroups = $props["USER_GROUPS"]["VALUE"];
+        $allowedUsers  = $props["USER_USERS"]["VALUE"];
+
+        $fields["GROUPS"] = $allowedGroups;
+        $fields["USERS"]  = $allowedUsers;
+
+        $userId = $USER->GetID();
+
+        if (
+            (empty($allowedGroups) && empty($allowedUsers)) ||
+            array_intersect($allowedGroups, $userGroups) ||
+            in_array($userId, (array)$allowedUsers)
+        ) {
+            $sites[] = $fields;
         }
     }
+    return $sites;
 }
-
-// --- получаем список сайтов с учётом прав ---
-$userGroups = $USER->GetUserGroupArray();
-$sites = getPortalSites($userGroups);
-?>
-
-<h1>Портал сайтов</h1>
-
-<?php include __DIR__."/templates/form.php"; ?>
-<?php include __DIR__."/templates/list.php"; ?>
-
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
