@@ -1,10 +1,38 @@
-<h2>Список сайтов</h2>
-<ul>
-<?php foreach ($sites as $site): ?>
-    <li>
-        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
-            <?=$site["NAME"]?>
-        </a>
-    </li>
-<?php endforeach; ?>
-</ul>
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+$APPLICATION->SetTitle("Портал сайтов");
+
+global $USER;
+use Bitrix\Main\Context;
+
+require_once __DIR__."/lib/functions.php";
+
+$request = Context::getCurrent()->getRequest();
+
+// обработка формы
+if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid()) {
+    $siteTitle = trim($request->getPost("SITE_TITLE"));
+    $siteCode  = trim($request->getPost("SITE_CODE"));
+    $siteGroups = $request->getPost("SITE_GROUPS") ?? [];
+
+    if ($siteTitle) {
+        $result = createPortalSite($siteTitle, $siteCode, $siteGroups);
+        if (!empty($result["error"])) {
+            echo "<pre style='color:red'>Ошибка: ".$result["error"]."</pre>";
+        } else {
+            echo "<pre style='color:green'>Сайт \"{$siteTitle}\" создан</pre>";
+        }
+    }
+}
+
+// получаем список сайтов с учётом прав
+$userGroups = $USER->GetUserGroupArray();
+$sites = getPortalSites($userGroups);
+?>
+
+<h1>Портал сайтов</h1>
+
+<?php include __DIR__."/templates/form.php"; ?>
+<?php include __DIR__."/templates/list.php"; ?>
+
+<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
