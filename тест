@@ -1,7 +1,164 @@
-<?php if (isset($_GET["created"])): ?>
-    <div class="ui-alert ui-alert-success">
-        <span class="ui-alert-message">
-            Сайт <b><?= htmlspecialcharsbx($_GET["created"]) ?></b> успешно создан.
-        </span>
-    </div>
-<?php endif; ?>
+<?php
+if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+global $USER;
+
+use Bitrix\Main\UI\Extension;
+
+Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
+?>
+
+<div style="margin:16px 0;">
+    <h3 style="margin-top:0;">Доступные сайты</h3>
+
+    <?php if (empty($sites)): ?>
+        <div class="ui-alert ui-alert-warning">
+            <span class="ui-alert-message">Нет доступных сайтов.</span>
+        </div>
+    <?php else: ?>
+        <?php foreach ($sites as $site): ?>
+            <?php
+            $siteId   = (int)$site["ID"];
+            $siteName = htmlspecialcharsbx($site["NAME"]);
+            $siteCode = htmlspecialcharsbx($site["CODE"]);
+            $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
+
+            // текущие участники роли
+            $members = [];
+            if ($roleId > 0) {
+                $by = "id"; $order = "asc";
+                $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN"]]);
+                while ($u = $rs->Fetch()) {
+                    $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
+                    if ($name === "") { $name = $u["LOGIN"]; }
+                    $members[] = [
+                        "id" => (int)$u["ID"],
+                        "title" => $name,
+                    ];
+                }
+            }
+            ?>
+            <div class="ui-block ui-block-section" style="margin-bottom:16px; padding:12px;">
+                <div class="ui-block-title">
+                    <h4 style="margin:0;"><?= $siteName ?></h4>
+                </div>
+                <div class="ui-block-content" style="margin-top:8px;">
+                    <div style="color:#777;">Папка: /local/portal_hub/sites/<?= $siteCode ?>/</div>
+                    <?php if ($roleId > 0): ?>
+                        <div style="color:#777;">Роль (ID группы): <?= $roleId ?></div>
+                    <?php else: ?>
+                        <div style="color:#777;">Роль не назначена — сайт виден всем</div>
+                    <?php endif; ?>
+
+                    <div style="margin-top:10px;">
+                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/" target="_blank" class="ui-btn ui-btn-link">
+                            Открыть сайт
+                        </a>
+                    </div>
+
+                    <?php if ($USER->IsAdmin() && $roleId > 0): ?>
+                        <hr style="margin:10px 0;">
+                        <div>
+                            <label><strong>Участники роли</strong></label>
+                            <div id="user-selector-<?= $roleId ?>" class="user-selector-container" style="margin:6px 0;"></div>
+                            <button type="button"
+                                    class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
+                                    data-role-id="<?= $roleId ?>"
+                                    data-users='<?= htmlspecialcharsbx(json_encode($members, JSON_UNESCAPED_UNICODE)) ?>'>
+                                Редактировать участников
+                            </button>
+                            <div id="save-status-<?= $roleId ?>" style="margin-top:8px;"></div>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
+
+<script>
+BX.ready(function () {
+    var BX_SESSID = '<?= bitrix_sessid() ?>';
+
+    // Отображение выбранных пользователей
+    function renderUsers(container, users) {
+        container.innerHTML = '';
+        users.forEach(function (u) {
+            const el = document.createElement('div');
+            el.className = 'ui-label ui-label-light ui-label-fill-light';
+            el.style.margin = '4px';
+            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
+            container.appendChild(el);
+        });
+    }
+
+    // AJAX-сохранение
+    function saveRole(roleId, userIds, onDone) {
+        const fd = new FormData();
+        fd.append('AJAX', 'UPDATE_ROLE');
+        fd.append('sessid', BX_SESSID);
+        fd.append('ROLE_ID', roleId);
+        userIds.forEach(function (id) { fd.append('ROLE_USERS[]', id); });
+
+        fetch(location.href, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin'
+        })
+        .then(r => r.json())
+        .then(data => onDone && onDone(data))
+        .catch(() => onDone && onDone({ status: 'error' }));
+    }
+
+    // Кнопка «Редактировать участников»
+    document.querySelectorAll('.js-edit-role').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const roleId = btn.getAttribute('data-role-id');
+            const container = document.getElementById('user-selector-' + roleId);
+            const saveStatus = document.getElementById('save-status-' + roleId);
+
+            let currentUsers = [];
+            try {
+                currentUsers = JSON.parse(btn.getAttribute('data-users')) || [];
+            } catch (e) {}
+
+            const dialog = new BX.UI.EntitySelector.Dialog({
+                id: 'portal-hub-role-' + roleId,
+                context: 'PORTAL_HUB_ROLE_EDIT',
+                targetNode: btn,
+                entities: [{ id: 'user' }],
+                multiple: true,
+                enableSearch: true,
+                width: 500,
+                dropdownMode: false,
+                selectedItems: currentUsers.map(u => ({ entityId: 'user', id: String(u.id) })),
+                events: {
+                    'Item:onSelect': updateView,
+                    'Item:onDeselect': updateView
+                }
+            });
+
+            function updateView() {
+                const items = dialog.getSelectedItems();
+                renderUsers(container, items.map(i => ({ id: i.id, title: i.getTitle() })));
+            }
+
+            dialog.subscribe('onHide', function () {
+                const items = dialog.getSelectedItems();
+                const ids = items.map(i => i.id);
+
+                saveStatus.innerHTML = '<div class="ui-alert ui-alert-primary"><span class="ui-alert-message">Сохраняем...</span></div>';
+                saveRole(roleId, ids, function (data) {
+                    if (data.status === 'success') {
+                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
+                        btn.setAttribute('data-users', JSON.stringify(items.map(i => ({ id: i.id, title: i.getTitle() }))));
+                    } else {
+                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
+                    }
+                });
+            });
+
+            dialog.show();
+        });
+    });
+});
+</script>
