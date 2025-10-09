@@ -8,7 +8,6 @@ if ($roleId > 0) {
         $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
         if ($name === "") { $name = $u["LOGIN"]; }
 
-        // Получаем мини-аватарку
         $photo = "";
         if (!empty($u["PERSONAL_PHOTO"])) {
             $file = CFile::ResizeImageGet(
@@ -17,7 +16,9 @@ if ($roleId > 0) {
                 BX_RESIZE_IMAGE_EXACT,
                 false
             );
-            $photo = $file["src"];
+            if (!empty($file["src"])) {
+                $photo = $file["src"];
+            }
         }
 
         $members[] = [
@@ -32,22 +33,25 @@ if ($roleId > 0) {
 
 <script>
 BX.ready(function() {
-    var ctn = document.getElementById('user-selector-<?= $roleId ?>');
-    if (!ctn) return;
+    var container = document.getElementById('user-selector-<?= $roleId ?>');
+    if (!container) return;
 
-    var users = <?= json_encode($members, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP) ?>;
+    var users = <?= \Bitrix\Main\Web\Json::encode($members) ?>; // безопасный JSON для Bitrix
+
     users.forEach(function(u) {
-        const el = document.createElement('div');
+        var el = document.createElement('div');
         el.className = 'ui-label ui-label-light ui-label-fill-light';
         el.style.display = 'flex';
         el.style.alignItems = 'center';
         el.style.gap = '6px';
         el.style.margin = '4px';
-        el.innerHTML = (u.avatar
-            ? '<img src="' + BX.util.htmlspecialchars(u.avatar) + '" style="width:24px; height:24px; border-radius:50%; object-fit:cover;">'
-            : '<div style="width:24px; height:24px; border-radius:50%; background:#e1e5eb; display:flex; align-items:center; justify-content:center; font-size:11px; color:#555;">' + (u.title ? u.title.charAt(0).toUpperCase() : '?') + '</div>'
-        ) + '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-        ctn.appendChild(el);
+        el.innerHTML =
+            (u.avatar
+                ? '<img src="' + BX.util.htmlspecialchars(u.avatar) + '" style="width:24px; height:24px; border-radius:50%; object-fit:cover;">'
+                : '<div style="width:24px; height:24px; border-radius:50%; background:#e1e5eb; display:flex; align-items:center; justify-content:center; font-size:11px; color:#555;">' + (u.title ? u.title.charAt(0).toUpperCase() : '?') + '</div>'
+            ) +
+            '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
+        container.appendChild(el);
     });
 });
 </script>
