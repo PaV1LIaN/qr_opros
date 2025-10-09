@@ -1,96 +1,93 @@
 <?php
-// Подключаем jQuery и Select2
-?>
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
-<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
 
-<h2>Список сайтов</h2>
-<ul>
-<?php foreach ($sites as $site): ?>
-    <li style="margin-bottom: 20px;">
-        <a href="/local/portal_hub/sites/<?=$site["CODE"]?>/" target="_blank">
-            <?=$site["NAME"]?>
-        </a>
+use Bitrix\Main\Loader;
+use Bitrix\Main\Application;
+use Bitrix\Main\UI\Extension;
+use PortalHub\Manager as PH;
 
-        <?php if ($USER->IsAdmin() && (int)$site["ROLE_ID"]): ?>
-            <?php
-            // Текущие пользователи роли
-            $labels = [];
-            $currentIds = [];
-            $rsU = \CUser::GetList($by="id", $order="asc", ["GROUPS_ID"=>[(int)$site["ROLE_ID"]]]);
-            while ($u = $rsU->Fetch()) {
-                $labels[] = "✅ ".trim($u["NAME"]." ".$u["LAST_NAME"]);
-                $currentIds[] = (int)$u["ID"];
-            }
-            ?>
-            <div id="access-view-<?=$site["ID"]?>" style="margin-left:20px;">
-                <strong>Пользователи:</strong> <?= $labels ? implode(", ", $labels) : "никто" ?>
-            </div>
+global $USER;
 
-            <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='block'">
-                Изменить доступ
-            </button>
+Extension::load("ui.entity-selector");
 
-            <div id="edit-<?=$site["ID"]?>" style="display:none; margin-top:10px;">
-                <form onsubmit="return updateAccess<?=$site["ID"]?>(this)">
-                    <input type="hidden" name="ROLE_ID" value="<?=$site["ROLE_ID"]?>">
+$request = Application::getInstance()->getContext()->getRequest();
+Loader::includeModule("iblock");
 
-                    <h4>Выберите пользователей:</h4>
-                    <select name="SITE_USERS[]" multiple id="user-select-<?=$site["ID"]?>" style="width:320px;">
-                        <?php
-                        $rsAllUsers = \CUser::GetList($by="id", $order="asc", ["ACTIVE"=>"Y"]);
-                        while ($user = $rsAllUsers->Fetch()):
-                            $uid = (int)$user["ID"];
-                            $label = trim($user["NAME"]." ".$user["LAST_NAME"]);
-                            if ($label === "") $label = $user["LOGIN"];
-                            $selected = in_array($uid, $currentIds, true) ? "selected" : "";
-                        ?>
-                            <option value="<?=$uid?>" <?=$selected?>><?=$label?></option>
-                        <?php endwhile; ?>
-                    </select>
+require_once __DIR__ . "/lib/functions.php";
 
-                    <br><br>
-                    <button type="submit">Сохранить</button>
-                    <button type="button" onclick="document.getElementById('edit-<?=$site["ID"]?>').style.display='none'">Отмена</button>
-                </form>
-            </div>
+// --- Создание сайта ---
+if (
+    $USER->IsAdmin() &&
+    $request->isPost() &&
+    check_bitrix_sessid() &&
+    $request->getPost("create_site") === "Y"
+) {
+    $siteTitle = trim($request->getPost("site_title"));
+    $siteCode = trim($request->getPost("site_code"));
+    $roleName = trim($request->getPost("role_name"));
+    $roleUsers = (array)$request->getPost("role_users");
 
-            <script>
-            $(document).ready(function() {
-                // инициализация Select2 для конкретного списка
-                $("#user-select-<?=$site["ID"]?>").select2({
-                    placeholder: "Выберите пользователей",
-                    allowClear: true,
-                    width: "resolve"
-                });
-            });
+    $result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
 
-            function updateAccess<?=$site["ID"]?>(form) {
-                const formData = new FormData(form);
-                formData.append("AJAX", "UPDATE_ROLE");
+    if ($result["success"]) {
+        echo "<pre style='color:green'>" . htmlspecialcharsbx($result["message"]) . "</pre>";
+    } else {
+        echo "<pre style='color:red'>" . htmlspecialcharsbx($result["message"]) . "</pre>";
+    }
+}
 
-                fetch("<?=$APPLICATION->GetCurPage()?>", {
-                    method: "POST",
-                    body: formData,
-                    headers: { "X-Requested-With": "XMLHttpRequest" }
-                })
-                .then(r => r.json())
-                .then(res => {
-                    if (res.success) {
-                        document.querySelector("#access-view-<?=$site["ID"]?>").innerHTML =
-                            "<strong>Пользователи:</strong> " + res.labels.join(", ");
-                        document.getElementById("edit-<?=$site["ID"]?>").style.display = "none";
-                    } else {
-                        alert("Ошибка сохранения");
-                    }
-                })
-                .catch(err => alert("AJAX error: " + err));
+// --- AJAX обновление роли ---
+if (
+    $USER->IsAdmin() &&
+    $request->isPost() &&
+    check_bitrix_sessid() &&
+    $request->getPost("AJAX") === "UPDATE_ROLE"
+) {
+    $roleId = (int)$request->getPost("ROLE_ID");
+    $roleUsers = (array)$request->getPost("ROLE_USERS");
 
-                return false;
-            }
-            </script>
-        <?php endif; ?>
-    </li>
-<?php endforeach; ?>
-</ul>
+    $currentUsers = [];
+    $rs = \CGroup::GetGroupUser($roleId);
+    while ($userId = $rs->Fetch()) {
+        $currentUsers[] = (int)$userId["USER_ID"];
+    }
+
+    // Добавляем новых пользователей
+    foreach ($roleUsers as $userId) {
+        $userId = (int)$userId;
+        if (!in_array($userId, $currentUsers, true)) {
+            \CUser::SetUserGroup($userId, array_merge(\CUser::GetUserGroup($userId), [$roleId]));
+        }
+    }
+
+    // Удаляем исключённых
+    foreach ($currentUsers as $userId) {
+        if (!in_array($userId, $roleUsers, true)) {
+            $groups = array_diff(\CUser::GetUserGroup($userId), [$roleId]);
+            \CUser::SetUserGroup($userId, $groups);
+        }
+    }
+
+    $result = [];
+    foreach ($roleUsers as $uid) {
+        $rsUser = \CUser::GetByID((int)$uid);
+        if ($arUser = $rsUser->Fetch()) {
+            $result[] = $arUser["NAME"] . " " . $arUser["LAST_NAME"];
+        }
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        "status" => "success",
+        "users" => $result,
+    ]);
+    die();
+}
+
+// --- Вывод списка сайтов ---
+$userGroups = $USER->GetUserGroupArray();
+$sites = PH::getPortalSites($userGroups);
+
+// --- HTML часть ---
+require __DIR__ . "/templates/form.php";
+require __DIR__ . "/templates/list.php";
