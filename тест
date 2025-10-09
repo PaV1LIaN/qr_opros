@@ -1,40 +1,109 @@
-public static function getPortalSites(array $userGroups): array
-{
-    if (!\Bitrix\Main\Loader::includeModule("iblock")) {
-        return [];
-    }
+<?php
+// --- Ранняя обработка AJAX без header.php ---
+if (isset($_POST['AJAX']) && $_POST['AJAX'] === 'UPDATE_ROLE') {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
+    global $USER;
 
-    $IBLOCK_ID = self::getPortalIblockId();
-    if ($IBLOCK_ID <= 0) {
-        return [];
-    }
+    if ($USER->IsAdmin() && check_bitrix_sessid() && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $roleId    = (int)($_POST['ROLE_ID'] ?? 0);
+        $roleUsers = array_map('intval', (array)($_POST['ROLE_USERS'] ?? []));
 
-    $userGroups = array_map('intval', (array)$userGroups);
-    $isAdmin = in_array(1, $userGroups, true); // группа администраторов
-
-    $sites = [];
-    $res = \CIBlockElement::GetList(
-        ["SORT" => "ASC", "ID" => "ASC"],
-        ["IBLOCK_ID" => $IBLOCK_ID, "ACTIVE" => "Y"],
-        false,
-        false,
-        ["ID", "NAME", "CODE", "PROPERTY_SITE_ROLE"]
-    );
-
-    while ($ar = $res->Fetch()) {
-        $roleId = (int)($ar["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
-
-        if ($isAdmin) {
-            $sites[] = $ar;
-            continue;
+        // Текущие участники роли
+        $currentUsers = [];
+        $by = "id"; $order = "asc";
+        $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID"]]);
+        while ($u = $rs->Fetch()) {
+            $currentUsers[] = (int)$u["ID"];
         }
 
-        if ($roleId > 0 && !in_array($roleId, $userGroups, true)) {
-            continue;
+        // Кого добавить / убрать
+        $toAdd    = array_diff($roleUsers, $currentUsers);
+        $toRemove = array_diff($currentUsers, $roleUsers);
+
+        foreach ($toAdd as $uid) {
+            $uid = (int)$uid;
+            $groups = array_map('intval', (array)CUser::GetUserGroup($uid));
+            if (!in_array($roleId, $groups, true)) {
+                $groups[] = $roleId;
+                CUser::SetUserGroup($uid, $groups);
+            }
         }
 
-        $sites[] = $ar;
+        foreach ($toRemove as $uid) {
+            $uid = (int)$uid;
+            $groups = array_map('intval', (array)CUser::GetUserGroup($uid));
+            $groups = array_values(array_diff($groups, [$roleId]));
+            CUser::SetUserGroup($uid, $groups);
+        }
+
+        // Имена для ответа
+        $names = [];
+        if (!empty($roleUsers)) {
+            $ids = implode("|", array_map('intval', $roleUsers));
+            $rsU = CUser::GetList($by, $order, ["ID" => $ids], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN"]]);
+            while ($u = $rsU->Fetch()) {
+                $title = trim($u["NAME"]." ".$u["LAST_NAME"]);
+                if ($title === "") { $title = $u["LOGIN"]; }
+                $names[] = $title;
+            }
+        }
+
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(["status" => "success", "users" => $names], JSON_UNESCAPED_UNICODE);
+        die();
     }
 
-    return $sites;
+    // Недостаточно прав/сессии
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(["status" => "error"], JSON_UNESCAPED_UNICODE);
+    die();
 }
+
+// --- Обычный рендер страницы с подключением UI-ассетов ---
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+use Bitrix\Main\Loader;
+use PortalHub\Manager as PH;
+
+global $USER;
+
+Loader::includeModule("iblock");
+require_once __DIR__ . "/lib/functions.php";
+
+// Обработка создания сайта (POST)
+if (
+    $USER->IsAdmin() &&
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    check_bitrix_sessid() &&
+    ($_POST["create_site"] ?? "") === "Y"
+) {
+    $siteTitle = trim((string)($_POST["site_title"] ?? ""));
+    $siteCode  = trim((string)($_POST["site_code"] ?? ""));
+    $roleName  = trim((string)($_POST["role_name"] ?? ""));
+
+    // Теперь пользователи приходят CSV-строкой из селектора
+    $roleUsersRaw = trim((string)($_POST["role_users"] ?? ""));
+    $roleUsers = $roleUsersRaw !== '' ? array_map('intval', explode(',', $roleUsersRaw)) : [];
+
+    $result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
+
+	// если успешно — делаем redirect, чтобы не пересоздавалось при F5
+	if (!empty($result["success"])) {
+		LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"]));
+		die();
+	} else {
+		echo '<div style="margin:10px 0">';
+		echo "<pre style='color:red'>" . htmlspecialcharsbx($result["message"]) . "</pre>";
+		echo '</div>';
+	}
+}
+
+// Данные для списка
+$userGroups = array_map('intval', (array)$USER->GetUserGroupArray());
+$sites = PH::getPortalSites($userGroups);
+
+// Вывод
+require __DIR__ . "/templates/form.php";
+require __DIR__ . "/templates/list.php";
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
