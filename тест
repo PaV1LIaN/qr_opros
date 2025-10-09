@@ -1,42 +1,7 @@
-public static function getPortalSites(array $userGroups): array
-{
-    if (!\Bitrix\Main\Loader::includeModule("iblock")) {
-        return [];
-    }
-
-    $IBLOCK_ID = self::getPortalIblockId();
-    if ($IBLOCK_ID <= 0) {
-        return [];
-    }
-
-    $userGroups = array_map('intval', (array)$userGroups);
-    $isAdmin = in_array(1, $userGroups, true); // группа администраторов
-
-    $sites = [];
-    $res = \CIBlockElement::GetList(
-        ["SORT" => "ASC", "ID" => "ASC"],
-        ["IBLOCK_ID" => $IBLOCK_ID, "ACTIVE" => "Y"],
-        false,
-        false,
-        ["ID", "NAME", "CODE", "PROPERTY_SITE_ROLE"]
-    );
-
-    while ($ar = $res->Fetch()) {
-        $roleId = (int)($ar["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
-
-        // Админы видят всё
-        if ($isAdmin) {
-            $sites[] = $ar;
-            continue;
-        }
-
-        // обычные пользователи — только по ролям
-        if ($roleId > 0 && !in_array($roleId, $userGroups, true)) {
-            continue;
-        }
-
-        $sites[] = $ar;
-    }
-
-    return $sites;
-}
+<?php if (isset($_GET["created"])): ?>
+    <div class="ui-alert ui-alert-success">
+        <span class="ui-alert-message">
+            Сайт <b><?= htmlspecialcharsbx($_GET["created"]) ?></b> успешно создан.
+        </span>
+    </div>
+<?php endif; ?>
