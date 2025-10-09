@@ -25,8 +25,8 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
                     $siteCode = htmlspecialcharsbx($site["CODE"]);
                     ?>
                     <div class="ui-list-item" style="padding:10px 14px;">
-                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/" 
-                           class="ui-link ui-link-primary" 
+                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
+                           class="ui-link ui-link-primary"
                            style="font-size:16px; text-decoration:none; display:block;">
                             <?= $siteName ?>
                         </a>
@@ -58,9 +58,9 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
                 <div class="ui-block ui-block-section" style="margin-bottom:16px; padding:12px;">
                     <div class="ui-block-title">
                         <h4 style="margin:0;">
-                            <a href="/local/portal_hub/sites/<?= $siteCode ?>/" 
-                               target="_blank" 
-                               class="ui-link ui-link-primary" 
+                            <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
+                               target="_blank"
+                               class="ui-link ui-link-primary"
                                style="font-size:16px; text-decoration:none;">
                                 <?= $siteName ?>
                             </a>
@@ -75,11 +75,33 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
                             <div style="color:#777;">Роль не назначена — сайт виден всем</div>
                         <?php endif; ?>
 
-                        <?php if ($USER->IsAdmin() && $roleId > 0): ?>
+                        <?php if ($roleId > 0): ?>
                             <hr style="margin:10px 0;">
                             <div>
                                 <label><strong>Участники роли</strong></label>
-                                <div id="user-selector-<?= $roleId ?>" class="user-selector-container" style="margin:6px 0;"></div>
+
+                                <!-- контейнер для отображения участников -->
+                                <div id="user-selector-<?= $roleId ?>"
+                                     class="user-selector-container"
+                                     style="margin:6px 0;"></div>
+
+                                <!-- сразу отрисовываем текущих -->
+                                <script>
+                                BX.ready(function() {
+                                    var ctn = document.getElementById('user-selector-<?= $roleId ?>');
+                                    if (ctn) {
+                                        var users = <?= json_encode($members, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP) ?>;
+                                        users.forEach(function(u) {
+                                            var el = document.createElement('div');
+                                            el.className = 'ui-label ui-label-light ui-label-fill-light';
+                                            el.style.margin = '4px';
+                                            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
+                                            ctn.appendChild(el);
+                                        });
+                                    }
+                                });
+                                </script>
+
                                 <button type="button"
                                         class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
                                         data-role-id="<?= $roleId ?>"
@@ -118,7 +140,7 @@ BX.ready(function () {
         fd.append('AJAX', 'UPDATE_ROLE');
         fd.append('sessid', BX_SESSID);
         fd.append('ROLE_ID', roleId);
-        userIds.forEach(function (id) { fd.append('ROLE_USERS[]', id); });
+        userIds.forEach(id => fd.append('ROLE_USERS[]', id));
 
         fetch(location.href, {
             method: 'POST',
@@ -132,14 +154,12 @@ BX.ready(function () {
 
     document.querySelectorAll('.js-edit-role').forEach(function (btn) {
         btn.addEventListener('click', function () {
-            const roleId = btn.getAttribute('data-role-id');
+            const roleId = btn.dataset.roleId;
             const container = document.getElementById('user-selector-' + roleId);
             const saveStatus = document.getElementById('save-status-' + roleId);
 
             let currentUsers = [];
-            try {
-                currentUsers = JSON.parse(btn.getAttribute('data-users')) || [];
-            } catch (e) {}
+            try { currentUsers = JSON.parse(btn.dataset.users) || []; } catch (e) {}
 
             const dialog = new BX.UI.EntitySelector.Dialog({
                 id: 'portal-hub-role-' + roleId,
@@ -170,7 +190,7 @@ BX.ready(function () {
                 saveRole(roleId, ids, function (data) {
                     if (data.status === 'success') {
                         saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
-                        btn.setAttribute('data-users', JSON.stringify(items.map(i => ({ id: i.id, title: i.getTitle() }))));
+                        btn.dataset.users = JSON.stringify(items.map(i => ({ id: i.id, title: i.getTitle() })));
                         setTimeout(() => saveStatus.innerHTML = '', 3000);
                     } else {
                         saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
