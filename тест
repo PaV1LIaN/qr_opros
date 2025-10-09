@@ -87,22 +87,25 @@ if (
 
     $result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
 
-	// если успешно — делаем redirect, чтобы не пересоздавалось при F5
-	if (!empty($result["success"])) {
-		LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"]));
-		die();
-	} else {
-		echo '<div style="margin:10px 0">';
-		echo "<pre style='color:red'>" . htmlspecialcharsbx($result["message"]) . "</pre>";
-		echo '</div>';
-	}
+    // если успешно — делаем redirect, чтобы не пересоздавалось при F5
+    if (!empty($result["success"])) {
+        LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"]));
+        die();
+    } else {
+        echo '<div style="margin:10px 0">';
+        echo "<pre style='color:red'>" . htmlspecialcharsbx($result["message"]) . "</pre>";
+        echo '</div>';
+    }
 }
 
 // Данные для списка
 $userGroups = array_map('intval', (array)$USER->GetUserGroupArray());
 $sites = PH::getPortalSites($userGroups);
 
-// Вывод
+// Проверим наличие сайтов для отладки
+// echo '<pre>'; print_r($sites); echo '</pre>';
+
+// Вывод шаблонов
 require __DIR__ . "/templates/form.php";
 require __DIR__ . "/templates/list.php";
 
