@@ -15,71 +15,93 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
             <span class="ui-alert-message">Нет доступных сайтов.</span>
         </div>
     <?php else: ?>
-        <?php foreach ($sites as $site): ?>
-            <?php
-            $siteId   = (int)$site["ID"];
-            $siteName = htmlspecialcharsbx($site["NAME"]);
-            $siteCode = htmlspecialcharsbx($site["CODE"]);
-            $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
 
-            // текущие участники роли
-            $members = [];
-            if ($roleId > 0) {
-                $by = "id"; $order = "asc";
-                $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN"]]);
-                while ($u = $rs->Fetch()) {
-                    $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
-                    if ($name === "") { $name = $u["LOGIN"]; }
-                    $members[] = [
-                        "id" => (int)$u["ID"],
-                        "title" => $name,
-                    ];
-                }
-            }
-            ?>
-            <div class="ui-block ui-block-section" style="margin-bottom:16px; padding:12px;">
-                <div class="ui-block-title">
-                    <h4 style="margin:0;"><?= $siteName ?></h4>
-                </div>
-                <div class="ui-block-content" style="margin-top:8px;">
-                    <div style="color:#777;">Папка: /local/portal_hub/sites/<?= $siteCode ?>/</div>
-                    <?php if ($roleId > 0): ?>
-                        <div style="color:#777;">Роль (ID группы): <?= $roleId ?></div>
-                    <?php else: ?>
-                        <div style="color:#777;">Роль не назначена — сайт виден всем</div>
-                    <?php endif; ?>
-
-                    <div style="margin-top:10px;">
-                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/" target="_blank" class="ui-btn ui-btn-link">
-                            Открыть сайт
+        <?php if (!$USER->IsAdmin()): ?>
+            <!-- ======= ВИД ДЛЯ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ ======= -->
+            <div class="ui-list ui-list-hover" style="margin-top:10px;">
+                <?php foreach ($sites as $site): ?>
+                    <?php
+                    $siteName = htmlspecialcharsbx($site["NAME"]);
+                    $siteCode = htmlspecialcharsbx($site["CODE"]);
+                    ?>
+                    <div class="ui-list-item" style="padding:10px 14px;">
+                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/" 
+                           class="ui-link ui-link-primary" 
+                           style="font-size:16px; text-decoration:none; display:block;">
+                            <?= $siteName ?>
                         </a>
                     </div>
-
-                    <?php if ($USER->IsAdmin() && $roleId > 0): ?>
-                        <hr style="margin:10px 0;">
-                        <div>
-                            <label><strong>Участники роли</strong></label>
-                            <div id="user-selector-<?= $roleId ?>" class="user-selector-container" style="margin:6px 0;"></div>
-                            <button type="button"
-                                    class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
-                                    data-role-id="<?= $roleId ?>"
-                                    data-users='<?= htmlspecialcharsbx(json_encode($members, JSON_UNESCAPED_UNICODE)) ?>'>
-                                Редактировать участников
-                            </button>
-                            <div id="save-status-<?= $roleId ?>" style="margin-top:8px;"></div>
-                        </div>
-                    <?php endif; ?>
-                </div>
+                <?php endforeach; ?>
             </div>
-        <?php endforeach; ?>
+
+        <?php else: ?>
+            <!-- ======= ВИД ДЛЯ АДМИНИСТРАТОРА ======= -->
+            <?php foreach ($sites as $site): ?>
+                <?php
+                $siteId   = (int)$site["ID"];
+                $siteName = htmlspecialcharsbx($site["NAME"]);
+                $siteCode = htmlspecialcharsbx($site["CODE"]);
+                $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
+
+                // Текущие участники роли
+                $members = [];
+                if ($roleId > 0) {
+                    $by = "id"; $order = "asc";
+                    $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN"]]);
+                    while ($u = $rs->Fetch()) {
+                        $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
+                        if ($name === "") { $name = $u["LOGIN"]; }
+                        $members[] = ["id" => (int)$u["ID"], "title" => $name];
+                    }
+                }
+                ?>
+                <div class="ui-block ui-block-section" style="margin-bottom:16px; padding:12px;">
+                    <div class="ui-block-title">
+                        <h4 style="margin:0;">
+                            <a href="/local/portal_hub/sites/<?= $siteCode ?>/" 
+                               target="_blank" 
+                               class="ui-link ui-link-primary" 
+                               style="font-size:16px; text-decoration:none;">
+                                <?= $siteName ?>
+                            </a>
+                        </h4>
+                    </div>
+
+                    <div class="ui-block-content" style="margin-top:8px;">
+                        <div style="color:#777;">Папка: /local/portal_hub/sites/<?= $siteCode ?>/</div>
+                        <?php if ($roleId > 0): ?>
+                            <div style="color:#777;">Роль (ID группы): <?= $roleId ?></div>
+                        <?php else: ?>
+                            <div style="color:#777;">Роль не назначена — сайт виден всем</div>
+                        <?php endif; ?>
+
+                        <?php if ($USER->IsAdmin() && $roleId > 0): ?>
+                            <hr style="margin:10px 0;">
+                            <div>
+                                <label><strong>Участники роли</strong></label>
+                                <div id="user-selector-<?= $roleId ?>" class="user-selector-container" style="margin:6px 0;"></div>
+                                <button type="button"
+                                        class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
+                                        data-role-id="<?= $roleId ?>"
+                                        data-users='<?= htmlspecialcharsbx(json_encode($members, JSON_UNESCAPED_UNICODE)) ?>'>
+                                    Редактировать участников
+                                </button>
+                                <div id="save-status-<?= $roleId ?>" style="margin-top:8px;"></div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+
     <?php endif; ?>
 </div>
 
+<?php if ($USER->IsAdmin()): ?>
 <script>
 BX.ready(function () {
     var BX_SESSID = '<?= bitrix_sessid() ?>';
 
-    // Отображение выбранных пользователей
     function renderUsers(container, users) {
         container.innerHTML = '';
         users.forEach(function (u) {
@@ -91,7 +113,6 @@ BX.ready(function () {
         });
     }
 
-    // AJAX-сохранение
     function saveRole(roleId, userIds, onDone) {
         const fd = new FormData();
         fd.append('AJAX', 'UPDATE_ROLE');
@@ -109,7 +130,6 @@ BX.ready(function () {
         .catch(() => onDone && onDone({ status: 'error' }));
     }
 
-    // Кнопка «Редактировать участников»
     document.querySelectorAll('.js-edit-role').forEach(function (btn) {
         btn.addEventListener('click', function () {
             const roleId = btn.getAttribute('data-role-id');
@@ -151,6 +171,7 @@ BX.ready(function () {
                     if (data.status === 'success') {
                         saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
                         btn.setAttribute('data-users', JSON.stringify(items.map(i => ({ id: i.id, title: i.getTitle() }))));
+                        setTimeout(() => saveStatus.innerHTML = '', 3000);
                     } else {
                         saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
                     }
@@ -162,3 +183,4 @@ BX.ready(function () {
     });
 });
 </script>
+<?php endif; ?>
