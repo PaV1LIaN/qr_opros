@@ -7,8 +7,53 @@ use Bitrix\Main\UI\Extension;
 Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
 ?>
 
-<div style="margin:16px 0;">
-    <h3 style="margin-top:0;">Доступные сайты</h3>
+<style>
+.portal-card {
+    background: #fff;
+    border: 1px solid #e3e7ec;
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    transition: all 0.2s ease;
+}
+.portal-card:hover {
+    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+    border-color: #dce2eb;
+}
+.portal-card h4 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+}
+.portal-meta {
+    color: #9ea5b4;
+    font-size: 13px;
+    margin-top: 4px;
+}
+.portal-users {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+.portal-list-link {
+    text-decoration: none;
+    color: #0065ff;
+    display: block;
+    padding: 12px 16px;
+    background: #fff;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    transition: background 0.2s;
+}
+.portal-list-link:hover {
+    background: #f5f7fa;
+}
+</style>
+
+<div style="margin:24px 0;">
+    <h3 style="margin:0 0 16px; font-size:20px; font-weight:600;">Доступные сайты</h3>
 
     <?php if (empty($sites)): ?>
         <div class="ui-alert ui-alert-warning">
@@ -18,33 +63,23 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
 
         <?php if (!$USER->IsAdmin()): ?>
             <!-- ======= ВИД ДЛЯ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ ======= -->
-            <div class="ui-list ui-list-hover" style="margin-top:10px;">
-                <?php foreach ($sites as $site): ?>
-                    <?php
-                    $siteName = htmlspecialcharsbx($site["NAME"]);
-                    $siteCode = htmlspecialcharsbx($site["CODE"]);
-                    ?>
-                    <div class="ui-list-item" style="padding:10px 14px;">
-                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
-                           class="ui-link ui-link-primary"
-                           style="font-size:16px; text-decoration:none; display:block;">
-                            <?= $siteName ?>
-                        </a>
-                    </div>
-                <?php endforeach; ?>
-            </div>
+            <?php foreach ($sites as $site): ?>
+                <?php $siteName = htmlspecialcharsbx($site["NAME"]);
+                      $siteCode = htmlspecialcharsbx($site["CODE"]); ?>
+                <a href="/local/portal_hub/sites/<?= $siteCode ?>/" class="portal-list-link">
+                    <?= $siteName ?>
+                </a>
+            <?php endforeach; ?>
 
         <?php else: ?>
-            <!-- ======= ВИД ДЛЯ АДМИНИСТРАТОРА ======= -->
+            <!-- ======= ВИД ДЛЯ АДМИНИСТРАТОРОВ ======= -->
             <?php foreach ($sites as $site): ?>
                 <?php
-                $siteId   = (int)$site["ID"];
                 $siteName = htmlspecialcharsbx($site["NAME"]);
                 $siteCode = htmlspecialcharsbx($site["CODE"]);
                 $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
-
-                // Текущие участники роли
                 $members = [];
+
                 if ($roleId > 0) {
                     $by = "id"; $order = "asc";
                     $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN"]]);
@@ -55,152 +90,6 @@ Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
                     }
                 }
                 ?>
-                <div class="ui-block ui-block-section" style="margin-bottom:16px; padding:12px;">
-                    <div class="ui-block-title">
-                        <h4 style="margin:0;">
-                            <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
-                               target="_blank"
-                               class="ui-link ui-link-primary"
-                               style="font-size:16px; text-decoration:none;">
-                                <?= $siteName ?>
-                            </a>
-                        </h4>
-                    </div>
-
-                    <div class="ui-block-content" style="margin-top:8px;">
-                        <div style="color:#777;">Папка: /local/portal_hub/sites/<?= $siteCode ?>/</div>
-                        <?php if ($roleId > 0): ?>
-                            <div style="color:#777;">Роль (ID группы): <?= $roleId ?></div>
-                        <?php else: ?>
-                            <div style="color:#777;">Роль не назначена — сайт виден всем</div>
-                        <?php endif; ?>
-
-                        <?php if ($roleId > 0): ?>
-                            <hr style="margin:10px 0;">
-                            <div>
-                                <label><strong>Участники роли</strong></label>
-
-                                <!-- контейнер для отображения участников -->
-                                <div id="user-selector-<?= $roleId ?>"
-                                     class="user-selector-container"
-                                     style="margin:6px 0;"></div>
-
-                                <!-- сразу отрисовываем текущих -->
-                                <script>
-                                BX.ready(function() {
-                                    var ctn = document.getElementById('user-selector-<?= $roleId ?>');
-                                    if (ctn) {
-                                        var users = <?= json_encode($members, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP) ?>;
-                                        users.forEach(function(u) {
-                                            var el = document.createElement('div');
-                                            el.className = 'ui-label ui-label-light ui-label-fill-light';
-                                            el.style.margin = '4px';
-                                            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-                                            ctn.appendChild(el);
-                                        });
-                                    }
-                                });
-                                </script>
-
-                                <button type="button"
-                                        class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
-                                        data-role-id="<?= $roleId ?>"
-                                        data-users='<?= htmlspecialcharsbx(json_encode($members, JSON_UNESCAPED_UNICODE)) ?>'>
-                                    Редактировать участников
-                                </button>
-                                <div id="save-status-<?= $roleId ?>" style="margin-top:8px;"></div>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-
-    <?php endif; ?>
-</div>
-
-<?php if ($USER->IsAdmin()): ?>
-<script>
-BX.ready(function () {
-    var BX_SESSID = '<?= bitrix_sessid() ?>';
-
-    function renderUsers(container, users) {
-        container.innerHTML = '';
-        users.forEach(function (u) {
-            const el = document.createElement('div');
-            el.className = 'ui-label ui-label-light ui-label-fill-light';
-            el.style.margin = '4px';
-            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-            container.appendChild(el);
-        });
-    }
-
-    function saveRole(roleId, userIds, onDone) {
-        const fd = new FormData();
-        fd.append('AJAX', 'UPDATE_ROLE');
-        fd.append('sessid', BX_SESSID);
-        fd.append('ROLE_ID', roleId);
-        userIds.forEach(id => fd.append('ROLE_USERS[]', id));
-
-        fetch(location.href, {
-            method: 'POST',
-            body: fd,
-            credentials: 'same-origin'
-        })
-        .then(r => r.json())
-        .then(data => onDone && onDone(data))
-        .catch(() => onDone && onDone({ status: 'error' }));
-    }
-
-    document.querySelectorAll('.js-edit-role').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            const roleId = btn.dataset.roleId;
-            const container = document.getElementById('user-selector-' + roleId);
-            const saveStatus = document.getElementById('save-status-' + roleId);
-
-            let currentUsers = [];
-            try { currentUsers = JSON.parse(btn.dataset.users) || []; } catch (e) {}
-
-            const dialog = new BX.UI.EntitySelector.Dialog({
-                id: 'portal-hub-role-' + roleId,
-                context: 'PORTAL_HUB_ROLE_EDIT',
-                targetNode: btn,
-                entities: [{ id: 'user' }],
-                multiple: true,
-                enableSearch: true,
-                width: 500,
-                dropdownMode: false,
-                selectedItems: currentUsers.map(u => ({ entityId: 'user', id: String(u.id) })),
-                events: {
-                    'Item:onSelect': updateView,
-                    'Item:onDeselect': updateView
-                }
-            });
-
-            function updateView() {
-                const items = dialog.getSelectedItems();
-                renderUsers(container, items.map(i => ({ id: i.id, title: i.getTitle() })));
-            }
-
-            dialog.subscribe('onHide', function () {
-                const items = dialog.getSelectedItems();
-                const ids = items.map(i => i.id);
-
-                saveStatus.innerHTML = '<div class="ui-alert ui-alert-primary"><span class="ui-alert-message">Сохраняем...</span></div>';
-                saveRole(roleId, ids, function (data) {
-                    if (data.status === 'success') {
-                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
-                        btn.dataset.users = JSON.stringify(items.map(i => ({ id: i.id, title: i.getTitle() })));
-                        setTimeout(() => saveStatus.innerHTML = '', 3000);
-                    } else {
-                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
-                    }
-                });
-            });
-
-            dialog.show();
-        });
-    });
-});
-</script>
-<?php endif; ?>
+                <div class="portal-card">
+                    <h4>
+                        <a href="/local/portal_h_
