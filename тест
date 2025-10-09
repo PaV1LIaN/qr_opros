@@ -1,57 +1,40 @@
-<?php
-// Текущие участники роли
-$members = [];
-if ($roleId > 0) {
-    $by = "id"; $order = "asc";
-    $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN","PERSONAL_PHOTO"]]);
-    while ($u = $rs->Fetch()) {
-        $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
-        if ($name === "") { $name = $u["LOGIN"]; }
+public static function getPortalSites(array $userGroups): array
+{
+    if (!\Bitrix\Main\Loader::includeModule("iblock")) {
+        return [];
+    }
 
-        $photo = "";
-        if (!empty($u["PERSONAL_PHOTO"])) {
-            $file = CFile::ResizeImageGet(
-                $u["PERSONAL_PHOTO"],
-                ["width" => 32, "height" => 32],
-                BX_RESIZE_IMAGE_EXACT,
-                false
-            );
-            if (!empty($file["src"])) {
-                $photo = $file["src"];
-            }
+    $IBLOCK_ID = self::getPortalIblockId();
+    if ($IBLOCK_ID <= 0) {
+        return [];
+    }
+
+    $userGroups = array_map('intval', (array)$userGroups);
+    $isAdmin = in_array(1, $userGroups, true); // группа администраторов
+
+    $sites = [];
+    $res = \CIBlockElement::GetList(
+        ["SORT" => "ASC", "ID" => "ASC"],
+        ["IBLOCK_ID" => $IBLOCK_ID, "ACTIVE" => "Y"],
+        false,
+        false,
+        ["ID", "NAME", "CODE", "PROPERTY_SITE_ROLE"]
+    );
+
+    while ($ar = $res->Fetch()) {
+        $roleId = (int)($ar["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
+
+        if ($isAdmin) {
+            $sites[] = $ar;
+            continue;
         }
 
-        $members[] = [
-            "id" => (int)$u["ID"],
-            "title" => $name,
-            "avatar" => $photo
-        ];
+        if ($roleId > 0 && !in_array($roleId, $userGroups, true)) {
+            continue;
+        }
+
+        $sites[] = $ar;
     }
+
+    return $sites;
 }
-?>
-<div class="portal-users" id="user-selector-<?= $roleId ?>"></div>
-
-<script>
-BX.ready(function() {
-    var container = document.getElementById('user-selector-<?= $roleId ?>');
-    if (!container) return;
-
-    var users = <?= \Bitrix\Main\Web\Json::encode($members) ?>; // безопасный JSON для Bitrix
-
-    users.forEach(function(u) {
-        var el = document.createElement('div');
-        el.className = 'ui-label ui-label-light ui-label-fill-light';
-        el.style.display = 'flex';
-        el.style.alignItems = 'center';
-        el.style.gap = '6px';
-        el.style.margin = '4px';
-        el.innerHTML =
-            (u.avatar
-                ? '<img src="' + BX.util.htmlspecialchars(u.avatar) + '" style="width:24px; height:24px; border-radius:50%; object-fit:cover;">'
-                : '<div style="width:24px; height:24px; border-radius:50%; background:#e1e5eb; display:flex; align-items:center; justify-content:center; font-size:11px; color:#555;">' + (u.title ? u.title.charAt(0).toUpperCase() : '?') + '</div>'
-            ) +
-            '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-        container.appendChild(el);
-    });
-});
-</script>
