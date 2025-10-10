@@ -1,12 +1,14 @@
-$result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
-
-if (!empty($result["success"])) {
-    LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"]));
-    die();
-} elseif (($result["status"] ?? "") === "exists") {
-    LocalRedirect($APPLICATION->GetCurPageParam("warning=" . urlencode($result["message"]), ["create_site"]));
-    die();
-} else {
-    LocalRedirect($APPLICATION->GetCurPageParam("error=" . urlencode($result["message"]), ["create_site"]));
-    die();
-}
+<?php if (!empty($_GET['warning'])): ?>
+<script>
+BX.ready(function() {
+    const msg = '<?= htmlspecialcharsbx($_GET['warning']) ?>';
+    BX.UI.Notification.Center.notify({
+        content: '⚠️ ' + BX.util.htmlspecialchars(msg),
+        autoHideDelay: 6000,
+        position: 'top-right',
+        category: 'portal_hub_warning',
+        color: 'warning'
+    });
+});
+</script>
+<?php endif; ?>
