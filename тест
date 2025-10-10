@@ -1,22 +1,85 @@
+public static function createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers = [])
+{
+    if (!\Bitrix\Main\Loader::includeModule("iblock")) {
+        return ["success" => false, "message" => "Модуль инфоблоков не найден"];
+    }
 
-Warning: ini_set(): Session ini settings cannot be changed after headers have already been sent in /var/www/html/bx-site/bitrix/modules/main/lib/session/handlers/nativefilesessionhandler.php on line 33
+    $IBLOCK_ID = self::getPortalIblockId();
+    if ($IBLOCK_ID <= 0) {
+        return ["success" => false, "message" => "Инфоблок 'portal_sites' не найден"];
+    }
 
-Warning: ini_set(): Session ini settings cannot be changed after headers have already been sent in /var/www/html/bx-site/bitrix/modules/main/lib/session/handlers/nativefilesessionhandler.php on line 34
+    $siteTitle = trim($siteTitle);
+    $siteCode  = trim($siteCode);
 
-Warning: session_set_save_handler(): Session save handler cannot be changed after headers have already been sent in /var/www/html/bx-site/bitrix/modules/main/lib/session/session.php on line 34
-[RuntimeException] 
-Could not start session because headers have already been sent. "/var/www/html/bx-site/local/portal_hub/index.php":1. (0)
-/var/www/html/bx-site/bitrix/modules/main/lib/session/session.php:144
-#0: Bitrix\Main\Session\Session->start()
-	/var/www/html/bx-site/bitrix/modules/main/lib/session/kernelsessionproxy.php:47
-#1: Bitrix\Main\Session\KernelSessionProxy->start()
-	/var/www/html/bx-site/bitrix/modules/main/include.php:1
-#2: require_once(string)
-	/var/www/html/bx-site/bitrix/modules/main/include/prolog_before.php:19
-#3: require_once(string)
-	/var/www/html/bx-site/bitrix/modules/main/include/prolog.php:10
-#4: require_once(string)
-	/var/www/html/bx-site/bitrix/header.php:1
-#5: require(string)
-	/var/www/html/bx-site/local/portal_hub/index.php:64
-----------
+    if ($siteTitle === "" || $siteCode === "") {
+        return ["success" => false, "message" => "Название и код сайта обязательны"];
+    }
+
+    // 🔍 Проверяем, нет ли сайта с таким названием/кодом
+    $exists = \CIBlockElement::GetList(
+        [],
+        ["IBLOCK_ID" => $IBLOCK_ID, [
+            "LOGIC" => "OR",
+            ["NAME" => $siteTitle],
+            ["CODE" => $siteCode],
+        ]],
+        false, false, ["ID", "NAME"]
+    )->Fetch();
+
+    if ($exists) {
+        return ["success" => false, "status" => "exists", "message" => "Сайт с таким названием или кодом уже существует"];
+    }
+
+    // 👑 Создаём 2 группы: администраторы и пользователи
+    $groupAdmin = new \CGroup;
+    $roleAdminId = $groupAdmin->Add([
+        "ACTIVE" => "Y",
+        "C_SORT" => 100,
+        "NAME" => $roleName . " (Администраторы)",
+        "STRING_ID" => "portal_role_" . $siteCode
+    ]);
+
+    $groupUser = new \CGroup;
+    $roleUserId = $groupUser->Add([
+        "ACTIVE" => "Y",
+        "C_SORT" => 200,
+        "NAME" => $roleName . " (Пользователи)",
+        "STRING_ID" => "portal_user_" . $siteCode
+    ]);
+
+    if (!$roleAdminId || !$roleUserId) {
+        return ["success" => false, "message" => "Не удалось создать группы пользователей"];
+    }
+
+    // Добавляем администраторов в группу
+    foreach ($roleUsers as $uid) {
+        $uid = (int)$uid;
+        if ($uid > 0) {
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($roleAdminId, $groups, true)) {
+                $groups[] = $roleAdminId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+    }
+
+    // 🗂️ Добавляем сайт в инфоблок
+    $el = new \CIBlockElement;
+    $id = $el->Add([
+        "IBLOCK_ID" => $IBLOCK_ID,
+        "NAME" => $siteTitle,
+        "CODE" => $siteCode,
+        "ACTIVE" => "Y",
+        "PROPERTY_VALUES" => [
+            "SITE_ROLE" => $roleAdminId,
+            "SITE_USER_ROLE" => $roleUserId,
+        ],
+    ]);
+
+    if (!$id) {
+        return ["success" => false, "message" => "Ошибка при создании сайта: " . $el->LAST_ERROR];
+    }
+
+    return ["success" => true, "id" => $id];
+}
