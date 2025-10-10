@@ -1,20 +1,25 @@
-<?php if (!empty($_GET['warning'])): ?>
-<script>
-BX.ready(function(){
-    const msg = '<?= htmlspecialcharsbx($_GET['warning']) ?>';
-    const code = '<?= htmlspecialcharsbx($_GET['exists_code'] ?? '') ?>';
-    let content = '⚠️ ' + BX.util.htmlspecialchars(msg);
-    if (code) {
-        const url = '/local/portal_hub/sites/' + code + '/';
-        content += '<br><a class="ui-link ui-link-primary" href="'+url+'" target="_blank">Открыть существующий сайт</a>';
+$result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
+
+$removeAck = ["create_site","created","warning","error","exists_code"];
+
+if (!empty($result["success"])) {
+    // Успех: удаляем старые служебные параметры и ставим новый created
+    LocalRedirect($APPLICATION->GetCurPageParam("created=" . rawurlencode($siteTitle), $removeAck));
+    die();
+} elseif (($result["status"] ?? "") === "exists") {
+    // Дубликат: warning (+ можно прокинуть exists_code для ссылки)
+    $q = "warning=" . rawurlencode($result["message"]);
+    if (!empty($result["code"])) {
+        $q .= "&exists_code=" . rawurlencode((string)$result["code"]);
     }
-    BX.UI.Notification.Center.notify({
-        content: content,
-        autoHideDelay: 6000,
-        position: 'top-right',
-        category: 'portal_hub_warning',
-        color: 'warning'
-    });
-});
-</script>
-<?php endif; ?>
+    LocalRedirect($APPLICATION->GetCurPageParam($q, $removeAck));
+    die();
+} else {
+    // Ошибка
+    LocalRedirect($APPLICATION->GetCurPageParam("error=" . rawurlencode($result["message"]), $removeAck));
+    die();
+}
+
+
+
+
