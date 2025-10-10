@@ -1,86 +1,12 @@
-public static function createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers = [])
-{
-    if (!\Bitrix\Main\Loader::includeModule("iblock")) {
-        return ["success" => false, "message" => "Модуль инфоблоков не найден"];
-    }
+$result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
 
-    $IBLOCK_ID = self::getPortalIblockId();
-    if ($IBLOCK_ID <= 0) {
-        return ["success" => false, "message" => "Инфоблок 'portal_sites' не найден"];
-    }
-
-    $siteTitle = trim($siteTitle);
-    $siteCode  = trim($siteCode);
-
-    if ($siteTitle === "" || $siteCode === "") {
-        return ["success" => false, "message" => "Название и код сайта обязательны"];
-    }
-
-    // 🔍 Проверка существующего сайта
-    $exists = \CIBlockElement::GetList(
-        [],
-        [
-            "IBLOCK_ID" => $IBLOCK_ID,
-            [
-                "LOGIC" => "OR",
-                ["NAME" => $siteTitle],
-                ["CODE" => $siteCode],
-            ]
-        ],
-        false,
-        false,
-        ["ID", "NAME", "CODE"]
-    )->Fetch();
-
-    if ($exists) {
-        return [
-            "success" => false,
-            "status" => "exists",
-            "message" => "Сайт с таким названием или кодом уже существует"
-        ];
-    }
-
-    // 🧱 Создаём группу (роль)
-    $group = new CGroup;
-    $roleId = $group->Add([
-        "ACTIVE" => "Y",
-        "C_SORT" => 100,
-        "NAME" => $roleName,
-        "STRING_ID" => "portal_role_" . $siteCode
-    ]);
-
-    if (!$roleId) {
-        return ["success" => false, "message" => "Не удалось создать группу роли"];
-    }
-
-    // Добавляем пользователей в роль
-    foreach ($roleUsers as $uid) {
-        $uid = (int)$uid;
-        if ($uid > 0) {
-            $groups = CUser::GetUserGroup($uid);
-            if (!in_array($roleId, $groups, true)) {
-                $groups[] = $roleId;
-                CUser::SetUserGroup($uid, $groups);
-            }
-        }
-    }
-
-    // 🗂️ Создаём элемент инфоблока
-    $el = new CIBlockElement;
-    $id = $el->Add([
-        "IBLOCK_ID" => $IBLOCK_ID,
-        "NAME" => $siteTitle,
-        "CODE" => $siteCode,
-        "ACTIVE" => "Y",
-        "PROPERTY_VALUES" => [
-            "SITE_ROLE" => $roleId
-        ],
-    ]);
-
-    if (!$id) {
-        return ["success" => false, "message" => "Ошибка при создании сайта: " . $el->LAST_ERROR];
-    }
-
-    // Всё успешно
-    return ["success" => true, "id" => $id, "message" => "Сайт создан успешно"];
+if (!empty($result["success"])) {
+    LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"]));
+    die();
+} elseif (($result["status"] ?? "") === "exists") {
+    LocalRedirect($APPLICATION->GetCurPageParam("warning=" . urlencode($result["message"]), ["create_site"]));
+    die();
+} else {
+    LocalRedirect($APPLICATION->GetCurPageParam("error=" . urlencode($result["message"]), ["create_site"]));
+    die();
 }
