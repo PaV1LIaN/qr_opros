@@ -1,13 +1,20 @@
-$result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $roleUsers);
-
-if (!empty($result["success"])) {
-    LocalRedirect($APPLICATION->GetCurPageParam("created=" . urlencode($siteTitle), ["create_site"])); die();
-} elseif (($result["status"] ?? "") === "exists") {
-    $params = [
-        "warning"     => $result["message"],
-        "exists_code" => (string)($result["code"] ?? ""),
-    ];
-    LocalRedirect($APPLICATION->GetCurPageParam(http_build_query($params), ["create_site"])); die();
-} else {
-    LocalRedirect($APPLICATION->GetCurPageParam("error=" . urlencode($result["message"]), ["create_site"])); die();
-}
+<?php if (!empty($_GET['warning'])): ?>
+<script>
+BX.ready(function(){
+    const msg = '<?= htmlspecialcharsbx($_GET['warning']) ?>';
+    const code = '<?= htmlspecialcharsbx($_GET['exists_code'] ?? '') ?>';
+    let content = '⚠️ ' + BX.util.htmlspecialchars(msg);
+    if (code) {
+        const url = '/local/portal_hub/sites/' + code + '/';
+        content += '<br><a class="ui-link ui-link-primary" href="'+url+'" target="_blank">Открыть существующий сайт</a>';
+    }
+    BX.UI.Notification.Center.notify({
+        content: content,
+        autoHideDelay: 6000,
+        position: 'top-right',
+        category: 'portal_hub_warning',
+        color: 'warning'
+    });
+});
+</script>
+<?php endif; ?>
