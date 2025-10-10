@@ -1,14 +1,5 @@
-<?php if (!empty($_GET['warning'])): ?>
-<script>
-BX.ready(function() {
-    const msg = '<?= htmlspecialcharsbx($_GET['warning']) ?>';
-    BX.UI.Notification.Center.notify({
-        content: '⚠️ ' + BX.util.htmlspecialchars(msg),
-        autoHideDelay: 6000,
-        position: 'top-right',
-        category: 'portal_hub_warning',
-        color: 'warning'
-    });
-});
-</script>
-<?php endif; ?>
+[Error] 
+Class "PortalHub\CGroup" not found (0)
+/var/www/html/bx-site/local/portal_hub/lib/functions.php:66
+#0: PortalHub\Manager::createPortalSite(string, string, string, array)
+	/var/www/html/bx-site/local/portal_hub/index.php:88
