@@ -1,97 +1,62 @@
-<?php
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
-
-use Bitrix\Main\UI\Extension;
-Extension::load(['ui.forms', 'ui.buttons', 'ui.entity-selector']);
-?>
-
-<div class="ui-card" style="padding:24px; border-radius:12px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06); max-width:800px;">
-    <h3 style="margin-bottom:18px; font-size:20px; font-weight:600;">Создание нового сайта</h3>
-
-    <form method="post">
-        <?= bitrix_sessid_post() ?>
-        <input type="hidden" name="create_site" value="Y">
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название сайта:</div>
-            <div class="ui-form-content"><input type="text" name="site_title" class="ui-ctl-element" style="width:100%;" required></div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Код сайта (папка):</div>
-            <div class="ui-form-content"><input type="text" name="site_code" class="ui-ctl-element" style="width:100%;" required></div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название роли:</div>
-            <div class="ui-form-content"><input type="text" name="role_name" class="ui-ctl-element" style="width:100%;" required></div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Администраторы сайта:</div>
-            <div class="ui-form-content">
-                <input type="hidden" name="role_users" id="role_users_input">
-                <div id="role_users_selector"></div>
-            </div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Обычные пользователи:</div>
-            <div class="ui-form-content">
-                <input type="hidden" name="site_users" id="site_users_input">
-                <div id="site_users_selector"></div>
-            </div>
-        </div>
-
-        <div class="ui-form-row" style="margin-top:16px;">
-            <button type="submit" class="ui-btn ui-btn-success">Создать сайт</button>
-        </div>
-    </form>
-</div>
-
+<?php if ($USER->IsAdmin()): ?>
 <script>
-BX.ready(function() {
-    BX.UI.Dialogs = BX.UI.Dialogs || {};
+BX.ready(function () {
+    const BX_SESSID = '<?= bitrix_sessid() ?>';
 
-    // Селектор администраторов
-    const adminDialog = new BX.UI.EntitySelector.Dialog({
-        id: 'portal_admins_create',
-        context: 'PORTAL_CREATE',
-        targetNode: document.getElementById('role_users_selector'),
-        entities: [{ id: 'user' }],
-        multiple: true,
-        enableSearch: true,
-        events: {
-            'Item:onSelect': updateAdmins,
-            'Item:onDeselect': updateAdmins
-        }
-    });
+    function saveRole(roleId, userIds, onDone) {
+        const fd = new FormData();
+        fd.append('AJAX', 'UPDATE_ROLE');
+        fd.append('sessid', BX_SESSID);
+        fd.append('ROLE_ID', roleId);
+        userIds.forEach(id => fd.append('ROLE_USERS[]', id));
 
-    // Селектор обычных пользователей
-    const userDialog = new BX.UI.EntitySelector.Dialog({
-        id: 'portal_users_create',
-        context: 'PORTAL_CREATE',
-        targetNode: document.getElementById('site_users_selector'),
-        entities: [{ id: 'user' }],
-        multiple: true,
-        enableSearch: true,
-        events: {
-            'Item:onSelect': updateUsers,
-            'Item:onDeselect': updateUsers
-        }
-    });
-
-    function updateAdmins() {
-        const ids = adminDialog.getSelectedItems().map(i => i.id);
-        document.getElementById('role_users_input').value = ids.join(',');
+        fetch(location.href, { method: 'POST', body: fd, credentials: 'same-origin' })
+            .then(r => r.json())
+            .then(data => onDone && onDone(data))
+            .catch(() => onDone && onDone({ status: 'error' }));
     }
 
-    function updateUsers() {
-        const ids = userDialog.getSelectedItems().map(i => i.id);
-        document.getElementById('site_users_input').value = ids.join(',');
+    function openSelector(btn, containerId) {
+        const roleId = btn.dataset.roleId;
+        const saveStatus = document.getElementById('save-status-' + roleId);
+        let currentUsers = [];
+        try { currentUsers = JSON.parse(btn.dataset.users) || []; } catch(e) {}
+
+        const dialog = new BX.UI.EntitySelector.Dialog({
+            id: 'portal-hub-role-' + roleId,
+            context: 'PORTAL_HUB_ROLE_EDIT',
+            targetNode: btn,
+            entities: [{ id: 'user' }],
+            multiple: true,
+            enableSearch: true,
+            width: 500,
+            dropdownMode: false,
+            selectedItems: currentUsers.map(u => ({ entityId: 'user', id: String(u.id) }))
+        });
+
+        dialog.subscribe('onHide', () => {
+            const items = dialog.getSelectedItems();
+            const ids = items.map(i => i.id);
+            saveStatus.innerHTML = '<div class="ui-alert ui-alert-primary"><span class="ui-alert-message">Сохраняем...</span></div>';
+            saveRole(roleId, ids, data => {
+                if (data.status === 'success') {
+                    saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
+                    setTimeout(() => saveStatus.innerHTML = '', 2500);
+                } else {
+                    saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
+                }
+            });
+        });
+
+        dialog.show();
     }
 
-    adminDialog.renderTo(document.getElementById('role_users_selector'));
-    userDialog.renderTo(document.getElementById('site_users_selector'));
+    BX.bindDelegate(document.body, 'click', {className: 'js-edit-role'}, function(e) {
+        openSelector(e.target, 'user-selector-admin-' + e.target.dataset.roleId);
+    });
+    BX.bindDelegate(document.body, 'click', {className: 'js-edit-user-role'}, function(e) {
+        openSelector(e.target, 'user-selector-user-' + e.target.dataset.roleId);
+    });
 });
 </script>
+<?php endif; ?>
