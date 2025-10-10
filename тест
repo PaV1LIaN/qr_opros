@@ -1,3 +1,9 @@
+// Вывод шаблонов
+require __DIR__ . "/templates/form.php";
+require __DIR__ . "/templates/list.php";
+
+?>
+
 <?php if (!empty($_GET['created'])): ?>
 <script>
 BX.ready(function() {
@@ -6,8 +12,26 @@ BX.ready(function() {
         content: '✅ Сайт <b>' + BX.util.htmlspecialchars(siteName) + '</b> успешно создан!',
         autoHideDelay: 5000,
         position: 'top-right',
-        category: 'portal_hub'
+        category: 'portal_hub_success'
     });
 });
 </script>
 <?php endif; ?>
+
+<?php if (!empty($_GET['error'])): ?>
+<script>
+BX.ready(function() {
+    const msg = '<?= htmlspecialcharsbx($_GET['error']) ?>';
+    BX.UI.Notification.Center.notify({
+        content: '❌ Ошибка при создании сайта:<br><b>' + BX.util.htmlspecialchars(msg) + '</b>',
+        autoHideDelay: 7000,
+        position: 'top-right',
+        category: 'portal_hub_error',
+        color: 'danger'
+    });
+});
+</script>
+<?php endif; ?>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
