@@ -1,79 +1,63 @@
 <script>
 BX.ready(function() {
-    const adminInput = document.getElementById('role_users_input');
-    const userInput  = document.getElementById('site_users_input');
+    BX.loadExt('ui.entity-selector').then(() => {
 
-    // Универсальная функция нормализации ID (user:123 → 123)
-    function normalizeIds(items) {
-        return items
-            .map(i => String(i.id).replace(/^user:/, '').trim())
-            .filter(id => id !== '');
-    }
+        const adminInput = document.getElementById('role_users_input');
+        const userInput  = document.getElementById('site_users_input');
 
-    // Обновление скрытых полей
-    function updateAdmins(selector) {
-        const ids = normalizeIds(selector.getSelectedItems());
-        adminInput.value = ids.join(',');
-        console.log('Admins:', ids);
-    }
-
-    function updateUsers(selector) {
-        const ids = normalizeIds(selector.getSelectedItems());
-        userInput.value = ids.join(',');
-        console.log('Users:', ids);
-    }
-
-    // === Администраторы ===
-    const adminSelector = new BX.UI.EntitySelector.TagSelector({
-        id: 'portal_admins_selector',
-        textBoxWidth: '100%',
-        multiple: true,
-        dialogOptions: {
-            id: 'portal_admins_dialog',
-            context: 'PORTAL_CREATE',
-            multiple: true,
-            entities: [
-                {
-                    id: 'user',
-                    options: { intranetUsersOnly: true, allowViewEmail: true }
-                }
-            ],
-            enableSearch: true,
-            preload: true,
-            dropdownMode: false
+        function normalize(items) {
+            return items.map(i => String(i.id).replace(/^user:/,'')).filter(Boolean);
         }
-    });
-    adminSelector.renderTo(document.getElementById('admin_tag_selector'));
-
-    // подписка на добавление/удаление
-    adminSelector.subscribe('onTagAdd',  () => updateAdmins(adminSelector));
-    adminSelector.subscribe('onTagRemove', () => updateAdmins(adminSelector));
-    adminSelector.subscribe('onClear', () => updateAdmins(adminSelector));
-
-    // === Обычные пользователи ===
-    const userSelector = new BX.UI.EntitySelector.TagSelector({
-        id: 'portal_users_selector',
-        textBoxWidth: '100%',
-        multiple: true,
-        dialogOptions: {
-            id: 'portal_users_dialog',
-            context: 'PORTAL_CREATE',
-            multiple: true,
-            entities: [
-                {
-                    id: 'user',
-                    options: { intranetUsersOnly: true, allowViewEmail: true }
-                }
-            ],
-            enableSearch: true,
-            preload: true,
-            dropdownMode: false
+        function update(selector, input) {
+            input.value = normalize(selector.getSelectedItems()).join(',');
+            console.log('Selected:', input.name, input.value);
         }
-    });
-    userSelector.renderTo(document.getElementById('user_tag_selector'));
 
-    userSelector.subscribe('onTagAdd',  () => updateUsers(userSelector));
-    userSelector.subscribe('onTagRemove', () => updateUsers(userSelector));
-    userSelector.subscribe('onClear', () => updateUsers(userSelector));
+        // === Администраторы ===
+        const adminSel = new BX.UI.EntitySelector.TagSelector({
+            id: 'portal_admins',
+            multiple: true,
+            textBoxWidth: '100%',
+            dialogOptions: {
+                id: 'portal_admins_dialog',
+                context: 'PORTAL_CREATE',
+                multiple: true,
+                enableSearch: true,
+                entities: [
+                    {
+                        id: 'user',
+                        selectable: true,          // <-- разрешаем выбор
+                        options: { intranetUsersOnly: true }
+                    }
+                ]
+            }
+        });
+        adminSel.renderTo(document.getElementById('admin_tag_selector'));
+        adminSel.subscribe('onTagAdd',   () => update(adminSel, adminInput));
+        adminSel.subscribe('onTagRemove',() => update(adminSel, adminInput));
+
+        // === Пользователи ===
+        const userSel = new BX.UI.EntitySelector.TagSelector({
+            id: 'portal_users',
+            multiple: true,
+            textBoxWidth: '100%',
+            dialogOptions: {
+                id: 'portal_users_dialog',
+                context: 'PORTAL_CREATE',
+                multiple: true,
+                enableSearch: true,
+                entities: [
+                    {
+                        id: 'user',
+                        selectable: true,          // <-- обязательно
+                        options: { intranetUsersOnly: true }
+                    }
+                ]
+            }
+        });
+        userSel.renderTo(document.getElementById('user_tag_selector'));
+        userSel.subscribe('onTagAdd',   () => update(userSel, userInput));
+        userSel.subscribe('onTagRemove',() => update(userSel, userInput));
+    });
 });
 </script>
