@@ -1,10 +1,57 @@
-Array
-(
-    [sessid] => 305c1ceba3f79f4444056473fe583cc9
-    [create_site] => Y
-    [role_users] => 
-    [site_users] => 
-    [site_title] => cxz
-    [site_code] => cxz
-    [role_name] => cxz
-)
+<script>
+BX.ready(function() {
+
+    // === Администраторы ===
+    const adminSelector = new BX.UI.EntitySelector.TagSelector({
+        id: 'portal_admins_selector',
+        textBoxWidth: '100%',
+        multiple: true,
+        dialogOptions: {
+            id: 'portal_admins_dialog',
+            context: 'PORTAL_CREATE',
+            entities: [{ id: 'user' }],
+            enableSearch: true,
+            width: 480
+        },
+        events: {
+            onChange: syncAdmins
+        }
+    });
+    adminSelector.renderTo(document.getElementById('admin_tag_selector'));
+
+    // === Обычные пользователи ===
+    const userSelector = new BX.UI.EntitySelector.TagSelector({
+        id: 'portal_users_selector',
+        textBoxWidth: '100%',
+        multiple: true,
+        dialogOptions: {
+            id: 'portal_users_dialog',
+            context: 'PORTAL_CREATE',
+            entities: [{ id: 'user' }],
+            enableSearch: true,
+            width: 480
+        },
+        events: {
+            onChange: syncUsers
+        }
+    });
+    userSelector.renderTo(document.getElementById('user_tag_selector'));
+
+    // === ВАЖНО: синхронизация скрытых полей ===
+    function syncAdmins() {
+        const ids = adminSelector.getTags()
+            .map(t => String(t.id).replace('user:', '').trim()) // <-- очищаем "user:"
+            .filter(v => v !== '');
+        document.getElementById('role_users_input').value = ids.join(',');
+        console.log('Администраторы:', ids); // для проверки
+    }
+
+    function syncUsers() {
+        const ids = userSelector.getTags()
+            .map(t => String(t.id).replace('user:', '').trim()) // <-- очищаем "user:"
+            .filter(v => v !== '');
+        document.getElementById('site_users_input').value = ids.join(',');
+        console.log('Пользователи:', ids); // для проверки
+    }
+});
+</script>
