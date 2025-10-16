@@ -1,13 +1,45 @@
-index.php 
 <?php
 // --- Ранняя обработка AJAX без header.php ---
 if (isset($_POST['AJAX']) && $_POST['AJAX'] === 'UPDATE_ROLE') {
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
+    require_once __DIR__ . "/lib/functions.php";
+
     global $USER;
+
+    header('Content-Type: application/json; charset=utf-8');
 
     if ($USER->IsAdmin() && check_bitrix_sessid() && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $roleId    = (int)($_POST['ROLE_ID'] ?? 0);
         $roleUsers = array_map('intval', (array)($_POST['ROLE_USERS'] ?? []));
+
+        // Защита от изменения системных групп
+        $protected = [1, 2]; // Администраторы, Все авторизованные
+        if (in_array($roleId, $protected, true)) {
+            echo json_encode(["status" => "error", "message" => "Недопустимая группа"], JSON_UNESCAPED_UNICODE);
+            die();
+        }
+
+        // Проверка, что редактируется именно портальная роль
+        $g = \CGroup::GetByID($roleId)->Fetch();
+        if (!$g || strpos((string)$g['STRING_ID'], 'portal_role_') !== 0) {
+            echo json_encode(["status" => "error", "message" => "Это не портальная роль"], JSON_UNESCAPED_UNICODE);
+            die();
+        }
+
+        // Доп. проверка привязки группы к какому‑либо порталу
+        $ibId = \PortalHub\Manager::getPortalIblockId();
+        $bound = false;
+        if ($ibId > 0) {
+            $bound = (bool)\CIBlockElement::GetList(
+                [],
+                ["IBLOCK_ID" => $ibId, "=PROPERTY_SITE_ROLE" => $roleId, "ACTIVE" => "Y"],
+                false, false, ["ID"]
+            )->Fetch();
+        }
+        if (!$bound) {
+            echo json_encode(["status" => "error", "message" => "Группа не привязана к порталу"], JSON_UNESCAPED_UNICODE);
+            die();
+        }
 
         // Текущие участники роли
         $currentUsers = [];
@@ -49,14 +81,11 @@ if (isset($_POST['AJAX']) && $_POST['AJAX'] === 'UPDATE_ROLE') {
             }
         }
 
-        header('Content-Type: application/json; charset=utf-8');
         echo json_encode(["status" => "success", "users" => $names], JSON_UNESCAPED_UNICODE);
         die();
     }
 
-    // Недостаточно прав/сессии
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(["status" => "error"], JSON_UNESCAPED_UNICODE);
+    echo json_encode(["status" => "error", "message" => "Недостаточно прав или сессия недействительна"], JSON_UNESCAPED_UNICODE);
     die();
 }
 
@@ -146,7 +175,8 @@ BX.ready(function() {
         content = '⚠️ ' + BX.util.htmlspecialchars(data);
         if (existsCode) {
             var url = '/local/portal_hub/sites/' + existsCode + '/';
-            content += '<br><a class="ui-link ui-link-primary" href="'+url+'" target="_blank">Открыть существующий сайт</a>';
+            var safeUrl = BX.util.htmlspecialchars(url);
+            content += '<br><a class="ui-link ui-link-primary" href="'+ safeUrl +'" target="_blank">Открыть существующий сайт</a>';
         }
         opts.color = 'warning';
     } else if (type === 'error') {
@@ -169,566 +199,3 @@ BX.ready(function() {
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-
-
-lib/functions.php
-<?php
-namespace PortalHub;
-
-use Bitrix\Main\Loader;
-
-class Manager
-{
-    /** Возвращает ID инфоблока с кодом portal_sites */
-    public static function getPortalIblockId(): int
-    {
-        if (!Loader::includeModule('iblock')) {
-            return 0;
-        }
-        $res = \CIBlock::GetList([], ['=CODE' => 'portal_sites'], false);
-        if ($ib = $res->Fetch()) {
-            return (int)$ib['ID'];
-        }
-        return 0;
-    }
-
-    /** Приводим код сайта к слагу */
-    public static function sanitizeCode(string $code): string
-    {
-        $code = mb_strtolower($code);
-        $code = preg_replace('~\s+~u', '-', $code);
-        $code = preg_replace('~[^a-z0-9\-_]~u', '', $code);
-        $code = trim($code, '-_');
-        return $code ?: 'site';
-    }
-
-    /**
-     * Создание сайта + роли + участников.
-     * Возвращает:
-     *   ["success"=>true, "id"=>int] |
-     *   ["success"=>false, "status"=>"exists", "message"=>string] |
-     *   ["success"=>false, "message"=>string]
-     */
-    public static function createPortalSite(string $siteTitle, string $siteCode, string $roleName, array $roleUsers = []): array
-    {
-        if (!Loader::includeModule('iblock')) {
-            return ["success" => false, "message" => "Модуль инфоблоков не найден"];
-        }
-
-        $IBLOCK_ID = self::getPortalIblockId();
-        if ($IBLOCK_ID <= 0) {
-            return ["success" => false, "message" => "Инфоблок 'portal_sites' не найден"];
-        }
-
-        $siteTitle = trim($siteTitle);
-        $siteCode  = self::sanitizeCode(trim($siteCode));
-        $roleName  = trim($roleName);
-
-        if ($siteTitle === "" || $siteCode === "" || $roleName === "") {
-            return ["success" => false, "message" => "Название, код сайта и роль обязательны"];
-        }
-
-        // 🔍 Проверка дублей по NAME или CODE
-        $exists = \CIBlockElement::GetList(
-            [],
-            [
-                "IBLOCK_ID" => $IBLOCK_ID,
-                "ACTIVE"    => "Y",
-                [
-                    "LOGIC" => "OR",
-                    ["=NAME" => $siteTitle],
-                    ["=CODE" => $siteCode],
-                ],
-            ],
-            false,
-            false,
-            ["ID","NAME","CODE"]
-        )->Fetch();
-
-        if ($exists) {
-            return [
-                "success" => false,
-                "status"  => "exists",
-                "message" => "Сайт с таким названием или кодом уже существует",
-                "code"    => (string)$exists["CODE"],
-                "name"    => (string)$exists["NAME"],
-            ];
-        }
-
-        // 🧱 Создаём группу (роль)
-        $group = new \CGroup;
-        $roleId = $group->Add([
-            "ACTIVE"    => "Y",
-            "C_SORT"    => 100,
-            "NAME"      => $roleName,
-            "STRING_ID" => "portal_role_" . $siteCode,
-        ]);
-        if (!$roleId) {
-            return ["success" => false, "message" => "Не удалось создать группу роли"];
-        }
-
-        // 👥 Добавляем пользователей в роль
-        $roleUsers = array_unique(array_map('intval', $roleUsers));
-        foreach ($roleUsers as $uid) {
-            if ($uid <= 0) { continue; }
-            $groups = (array)\CUser::GetUserGroup($uid);
-            $groups = array_map('intval', $groups);
-            if (!in_array((int)$roleId, $groups, true)) {
-                $groups[] = (int)$roleId;
-                \CUser::SetUserGroup($uid, $groups);
-            }
-        }
-
-        // 🗂️ Создаём элемент инфоблока для сайта
-        $el = new \CIBlockElement;
-        $id = $el->Add([
-            "IBLOCK_ID"        => $IBLOCK_ID,
-            "ACTIVE"           => "Y",
-            "NAME"             => $siteTitle,
-            "CODE"             => $siteCode,
-            "PROPERTY_VALUES"  => [
-                "SITE_ROLE" => (int)$roleId,
-            ],
-        ]);
-        if (!$id) {
-            return ["success" => false, "message" => "Ошибка при создании сайта: ".$el->LAST_ERROR];
-        }
-
-        return ["success" => true, "id" => (int)$id];
-    }
-
-    /**
-     * Возвращает сайты, доступные пользователю по группам.
-     * У админов — все активные сайты.
-     */
-    public static function getPortalSites(array $userGroups): array
-    {
-        if (!Loader::includeModule('iblock')) {
-            return [];
-        }
-        $IBLOCK_ID = self::getPortalIblockId();
-        if ($IBLOCK_ID <= 0) {
-            return [];
-        }
-
-        global $USER;
-        $isAdmin = (is_object($USER) && $USER->IsAdmin()) || in_array(1, array_map('intval', $userGroups), true);
-
-        $filter = [
-            "IBLOCK_ID" => $IBLOCK_ID,
-            "ACTIVE"    => "Y",
-        ];
-
-        if (!$isAdmin) {
-            $ug = array_map('intval', $userGroups);
-            // Показать сайты без роли (публичные) ИЛИ с ролью, соответствующей любой группе пользователя
-            $filter[] = [
-                "LOGIC" => "OR",
-                ["!PROPERTY_SITE_ROLE" => false, "PROPERTY_SITE_ROLE" => $ug],
-                ["PROPERTY_SITE_ROLE" => false],
-            ];
-        }
-
-        $sites = [];
-        $res = \CIBlockElement::GetList(
-            ["NAME" => "ASC"],
-            $filter,
-            false,
-            false,
-            ["ID", "NAME", "CODE", "PROPERTY_SITE_ROLE"]
-        );
-        while ($row = $res->GetNext()) {
-            $sites[] = $row;
-        }
-        return $sites;
-    }
-}
-
-
-templates/form.php
-<?php
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
-global $USER;
-
-use Bitrix\Main\UI\Extension;
-
-if (!$USER->IsAdmin()) return;
-
-// Загружаем Bitrix UI (кнопки/формы/селектор)
-Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.forms', 'main.core']);
-?>
-
-<?php if (isset($_GET["created"])): ?>
-    <div class="ui-alert ui-alert-success">
-        <span class="ui-alert-message">
-            Сайт <b><?= htmlspecialcharsbx($_GET["created"]) ?></b> успешно создан.
-        </span>
-    </div>
-<?php endif; ?>
-
-<div class="ui-block ui-block-section" style="padding:16px;">
-    <div class="ui-block-title">
-        <h3>Создать новый портал сайта</h3>
-    </div>
-
-    <form method="post" action="" class="ui-form">
-        <?= bitrix_sessid_post() ?>
-        <input type="hidden" name="create_site" value="Y" />
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название сайта</div>
-            <div class="ui-form-content">
-                <input type="text" name="site_title" required class="ui-ctl ui-ctl-textbox">
-            </div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Код сайта (папка, латиница)</div>
-            <div class="ui-form-content">
-                <input type="text" name="site_code" class="ui-ctl ui-ctl-textbox" placeholder="Оставьте пустым — создастся автоматически">
-            </div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название роли</div>
-            <div class="ui-form-content">
-                <input type="text" name="role_name" class="ui-ctl ui-ctl-textbox" placeholder="Например: Роль отдела продаж">
-            </div>
-        </div>
-
-        <div class="ui-form-row">
-            <div class="ui-form-label">Пользователи роли</div>
-            <div class="ui-form-content">
-                <input type="hidden" name="role_users" id="role_users_input">
-                <div id="user-selector" style="margin-bottom:10px;"></div>
-                <button type="button" id="open-selector-btn" class="ui-btn ui-btn-light-border ui-btn-sm">
-                    Выбрать пользователей
-                </button>
-            </div>
-        </div>
-
-        <div class="ui-form-row">
-            <button type="submit" class="ui-btn ui-btn-success">Создать сайт</button>
-        </div>
-    </form>
-</div>
-
-<script>
-BX.ready(function () {
-    var openBtn = document.getElementById('open-selector-btn');
-    var container = document.getElementById('user-selector');
-    var hiddenInput = document.getElementById('role_users_input');
-
-    if (!openBtn) return;
-
-    var dialog = new BX.UI.EntitySelector.Dialog({
-        id: 'portal-hub-user-selector',
-        targetNode: openBtn,
-        context: 'PORTAL_HUB_USER_SELECT',
-        entities: [{ id: 'user' }],
-        multiple: true,
-        enableSearch: true,
-        width: 500,
-        dropdownMode: false,
-        events: {
-            'Item:onSelect': updateView,
-            'Item:onDeselect': updateView
-        }
-    });
-
-    function updateView() {
-        var items = dialog.getSelectedItems();
-        // Обновляем скрытое поле
-        hiddenInput.value = items.map(function (i) { return i.id; }).join(',');
-
-        // Отрисовываем красивые лейблы
-        container.innerHTML = '';
-        items.forEach(function (i) {
-            var el = document.createElement('div');
-            el.className = 'ui-label ui-label-light ui-label-fill-light';
-            el.style.margin = '4px';
-            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(i.getTitle()) + '</span>';
-            container.appendChild(el);
-        });
-    }
-
-    openBtn.addEventListener('click', function () {
-        if (typeof BX === 'undefined' || !BX.UI || !BX.UI.EntitySelector) {
-            alert('UI Entity Selector не загружен. Убедитесь, что страница подключает header.php.');
-            return;
-        }
-        dialog.show();
-    });
-});
-</script>
-
-
-templates/list.php
-<?php
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
-global $USER;
-
-use Bitrix\Main\UI\Extension;
-
-Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'main.core']);
-?>
-
-<style>
-.portal-card {
-    background: #fff;
-    border: 1px solid #e3e7ec;
-    border-radius: 12px;
-    padding: 18px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-    transition: all 0.2s ease;
-}
-.portal-card:hover {
-    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
-    border-color: #dce2eb;
-}
-.portal-card h4 {
-    margin: 0;
-    font-size: 17px;
-    font-weight: 600;
-}
-.portal-meta {
-    color: #9ea5b4;
-    font-size: 13px;
-    margin-top: 4px;
-}
-.portal-users {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
-}
-.portal-list-link {
-    text-decoration: none;
-    color: #0065ff;
-    display: block;
-    padding: 12px 16px;
-    background: #fff;
-    border-radius: 8px;
-    margin-bottom: 8px;
-    transition: background 0.2s;
-}
-.portal-list-link:hover {
-    background: #f5f7fa;
-}
-</style>
-
-<div style="margin:24px 0;">
-    <h3 style="margin:0 0 16px; font-size:20px; font-weight:600;">Доступные сайты</h3>
-
-    <?php if (empty($sites)): ?>
-        <div class="ui-alert ui-alert-warning">
-            <span class="ui-alert-message">Нет доступных сайтов.</span>
-        </div>
-    <?php else: ?>
-
-        <?php if (!$USER->IsAdmin()): ?>
-            <!-- ======= ВИД ДЛЯ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ ======= -->
-            <?php foreach ($sites as $site): ?>
-                <?php
-                $siteName = htmlspecialcharsbx($site["NAME"]);
-                $siteCode = htmlspecialcharsbx($site["CODE"]);
-                ?>
-                <a href="/local/portal_hub/sites/<?= $siteCode ?>/" class="portal-list-link">
-                    <?= $siteName ?>
-                </a>
-            <?php endforeach; ?>
-
-        <?php else: ?>
-            <!-- ======= ВИД ДЛЯ АДМИНИСТРАТОРОВ ======= -->
-            <?php foreach ($sites as $site): ?>
-                <?php
-                $siteId   = (int)$site["ID"];
-                $siteName = htmlspecialcharsbx($site["NAME"]);
-                $siteCode = htmlspecialcharsbx($site["CODE"]);
-                $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
-
-                // Текущие участники роли
-                $members = [];
-                if ($roleId > 0) {
-                    $by = "id"; $order = "asc";
-                    $rs = CUser::GetList($by, $order, ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID","NAME","LAST_NAME","LOGIN","PERSONAL_PHOTO"]]);
-                    while ($u = $rs->Fetch()) {
-                        $name = trim($u["NAME"] . " " . $u["LAST_NAME"]);
-                        if ($name === "") { $name = $u["LOGIN"]; }
-
-                        // Мини-аватар
-                        $photo = "";
-                        if (!empty($u["PERSONAL_PHOTO"])) {
-                            $file = CFile::ResizeImageGet(
-                                $u["PERSONAL_PHOTO"],
-                                ["width" => 32, "height" => 32],
-                                BX_RESIZE_IMAGE_EXACT,
-                                false
-                            );
-                            if (!empty($file["src"])) {
-                                $photo = $file["src"];
-                            }
-                        }
-
-                        $members[] = [
-                            "id" => (int)$u["ID"],
-                            "title" => $name,
-                            "avatar" => $photo
-                        ];
-                    }
-                }
-                ?>
-                <div class="portal-card">
-                    <h4>
-                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
-                           target="_blank"
-                           class="ui-link ui-link-primary">
-                           <?= $siteName ?>
-                        </a>
-                    </h4>
-                    <div class="portal-meta">Папка: /local/portal_hub/sites/<?= $siteCode ?>/</div>
-                    <?php if ($roleId > 0): ?>
-                        <div class="portal-meta">Роль (ID группы): <?= $roleId ?></div>
-                    <?php else: ?>
-                        <div class="portal-meta">Роль не назначена — сайт виден всем</div>
-                    <?php endif; ?>
-
-                    <?php if ($roleId > 0): ?>
-                        <div class="portal-users" id="user-selector-<?= $roleId ?>"></div>
-                        <script>
-                        BX.ready(function() {
-                            var ctn = document.getElementById('user-selector-<?= $roleId ?>');
-                            if (!ctn) return;
-
-                            var users = <?= \Bitrix\Main\Web\Json::encode($members) ?>;
-
-                            users.forEach(function(u) {
-                                var el = document.createElement('div');
-                                el.className = 'ui-label ui-label-light ui-label-fill-light';
-                                el.style.display = 'flex';
-                                el.style.alignItems = 'center';
-                                el.style.gap = '6px';
-                                el.style.margin = '4px';
-                                el.innerHTML =
-                                    (u.avatar
-                                        ? '<img src="' + BX.util.htmlspecialchars(u.avatar) + '" style="width:24px; height:24px; border-radius:50%; object-fit:cover;">'
-                                        : '<div style="width:24px; height:24px; border-radius:50%; background:#e1e5eb; display:flex; align-items:center; justify-content:center; font-size:11px; color:#555;">' + (u.title ? u.title.charAt(0).toUpperCase() : '?') + '</div>'
-                                    ) +
-                                    '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-                                ctn.appendChild(el);
-                            });
-                        });
-                        </script>
-
-                        <div style="margin-top:10px;">
-                            <button type="button"
-                                class="ui-btn ui-btn-light-border ui-btn-sm js-edit-role"
-                                data-role-id="<?= $roleId ?>"
-                                data-users='<?= htmlspecialcharsbx(json_encode($members, JSON_UNESCAPED_UNICODE)) ?>'>
-                                Редактировать участников
-                            </button>
-                            <div id="save-status-<?= $roleId ?>" style="margin-top:8px;"></div>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-
-    <?php endif; ?>
-</div>
-
-<?php if ($USER->IsAdmin()): ?>
-<script>
-BX.ready(function () {
-    const BX_SESSID = '<?= bitrix_sessid() ?>';
-
-    function renderUsers(container, users) {
-        container.innerHTML = '';
-        users.forEach(u => {
-            const el = document.createElement('div');
-            el.className = 'ui-label ui-label-light ui-label-fill-light';
-            el.style.display = 'flex';
-            el.style.alignItems = 'center';
-            el.style.gap = '6px';
-            el.innerHTML =
-                (u.avatar
-                    ? '<img src="' + BX.util.htmlspecialchars(u.avatar) + '" style="width:24px; height:24px; border-radius:50%; object-fit:cover;">'
-                    : '<div style="width:24px; height:24px; border-radius:50%; background:#e1e5eb; display:flex; align-items:center; justify-content:center; font-size:11px; color:#555;">' + (u.title ? u.title.charAt(0).toUpperCase() : '?') + '</div>'
-                ) +
-                '<span class="ui-label-inner">' + BX.util.htmlspecialchars(u.title) + '</span>';
-            container.appendChild(el);
-        });
-    }
-
-    function saveRole(roleId, userIds, onDone) {
-        const fd = new FormData();
-        fd.append('AJAX', 'UPDATE_ROLE');
-        fd.append('sessid', BX_SESSID);
-        fd.append('ROLE_ID', roleId);
-        userIds.forEach(id => fd.append('ROLE_USERS[]', id));
-
-        fetch(location.href, { method: 'POST', body: fd, credentials: 'same-origin' })
-            .then(r => r.json())
-            .then(data => onDone && onDone(data))
-            .catch(() => onDone && onDone({ status: 'error' }));
-    }
-
-    document.querySelectorAll('.js-edit-role').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const roleId = btn.dataset.roleId;
-            const container = document.getElementById('user-selector-' + roleId);
-            const saveStatus = document.getElementById('save-status-' + roleId);
-            let currentUsers = [];
-            try { currentUsers = JSON.parse(btn.dataset.users) || []; } catch(e) {}
-
-            const dialog = new BX.UI.EntitySelector.Dialog({
-                id: 'portal-hub-role-' + roleId,
-                context: 'PORTAL_HUB_ROLE_EDIT',
-                targetNode: btn,
-                entities: [{ id: 'user' }],
-                multiple: true,
-                enableSearch: true,
-                width: 500,
-                dropdownMode: false,
-                selectedItems: currentUsers.map(u => ({ entityId: 'user', id: String(u.id) })),
-                events: {
-                    'Item:onSelect': updateView,
-                    'Item:onDeselect': updateView
-                }
-            });
-
-            function updateView() {
-                const items = dialog.getSelectedItems();
-                renderUsers(container, items.map(i => ({
-                    id: i.id,
-                    title: i.getTitle(),
-                    avatar: i.getAvatar()
-                })));
-            }
-
-            dialog.subscribe('onHide', () => {
-                const items = dialog.getSelectedItems();
-                const ids = items.map(i => i.id);
-                saveStatus.innerHTML = '<div class="ui-alert ui-alert-primary"><span class="ui-alert-message">Сохраняем...</span></div>';
-                saveRole(roleId, ids, data => {
-                    if (data.status === 'success') {
-                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
-                        btn.dataset.users = JSON.stringify(items.map(i => ({
-                            id: i.id,
-                            title: i.getTitle(),
-                            avatar: i.getAvatar()
-                        })));
-                        setTimeout(() => saveStatus.innerHTML = '', 2500);
-                    } else {
-                        saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
-                    }
-                });
-            });
-
-            dialog.show();
-        });
-    });
-});
-</script>
-<?php endif; ?>
