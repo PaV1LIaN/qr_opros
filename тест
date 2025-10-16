@@ -1,3 +1,148 @@
-[Error] 
-Class "PortalHub\Manager" not found (0)
-/var/www/html/bx-site/local/portal_hub/index.php:93
+<?php
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+// --- AJAX обновление ролей ---
+if (isset($_POST['AJAX']) && $_POST['AJAX'] === 'UPDATE_ROLE') {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
+    global $USER;
+
+    if ($USER->IsAdmin() && check_bitrix_sessid()) {
+        $roleId = (int)($_POST['ROLE_ID'] ?? 0);
+        $roleUsers = array_map('intval', (array)($_POST['ROLE_USERS'] ?? []));
+        $current = [];
+
+        $rs = \CUser::GetList($b = "id", $o = "asc", ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID"]]);
+        while ($u = $rs->Fetch()) {
+            $current[] = (int)$u["ID"];
+        }
+
+        $add = array_diff($roleUsers, $current);
+        $del = array_diff($current, $roleUsers);
+
+        foreach ($add as $uid) {
+            $uid = (int)$uid;
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($roleId, $groups, true)) {
+                $groups[] = $roleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+
+        foreach ($del as $uid) {
+            $uid = (int)$uid;
+            $groups = (array)\CUser::GetUserGroup($uid);
+            $groups = array_diff($groups, [$roleId]);
+            \CUser::SetUserGroup($uid, $groups);
+        }
+
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(["status" => "success"]);
+        die();
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(["status" => "error"]);
+    die();
+}
+
+// --- Основной рендер ---
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+use Bitrix\Main\Loader;
+
+// === Подключаем модуль и класс ===
+Loader::includeModule("iblock");
+require_once __DIR__ . "/lib/functions.php";  // ← ключевая строка
+use PortalHub\Manager as PH;                  // ← подключаем namespace после require
+
+global $USER;
+
+// === Обработка создания сайта ===
+if (
+    $USER->IsAdmin() &&
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    check_bitrix_sessid() &&
+    ($_POST['create_site'] ?? '') === 'Y'
+) {
+    $siteTitle = trim($_POST['site_title'] ?? '');
+    $siteCode  = trim($_POST['site_code'] ?? '');
+    $roleName  = trim($_POST['role_name'] ?? '');
+
+    // Администраторы
+    $admins = array_filter(array_map('intval', explode(',', $_POST['role_users'] ?? '')));
+    // Обычные пользователи
+    $users  = array_filter(array_map('intval', explode(',', $_POST['site_users'] ?? '')));
+
+    $result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $admins, $users);
+
+    $clean = ["create_site", "created", "warning", "error"];
+    if (!empty($result["success"])) {
+        LocalRedirect($APPLICATION->GetCurPageParam("created=" . rawurlencode($siteTitle), $clean));
+        die();
+    } elseif (($result["status"] ?? "") === "exists") {
+        LocalRedirect($APPLICATION->GetCurPageParam("warning=" . rawurlencode($result["message"]), $clean));
+        die();
+    } else {
+        LocalRedirect($APPLICATION->GetCurPageParam("error=" . rawurlencode($result["message"]), $clean));
+        die();
+    }
+}
+
+// === Список сайтов ===
+$userGroups = (array)$USER->GetUserGroupArray();
+$sites = PH::getPortalSites($userGroups);
+
+// === Подключаем шаблоны ===
+require __DIR__ . "/templates/form.php";
+require __DIR__ . "/templates/list.php";
+
+// === Уведомления ===
+$type = '';
+$msg = '';
+if (!empty($_GET['created'])) {
+    $type = 'success';
+    $msg = $_GET['created'];
+} elseif (!empty($_GET['warning'])) {
+    $type = 'warning';
+    $msg = $_GET['warning'];
+} elseif (!empty($_GET['error'])) {
+    $type = 'error';
+    $msg = $_GET['error'];
+}
+
+if ($type): ?>
+<script>
+BX.ready(function() {
+    const type = '<?= CUtil::JSEscape($type) ?>';
+    const msg  = '<?= CUtil::JSEscape($msg) ?>';
+    let color = '', text = '';
+
+    if (type === 'success') {
+        text = '✅ Сайт <b>' + BX.util.htmlspecialchars(msg) + '</b> успешно создан!';
+    } else if (type === 'warning') {
+        color = 'warning';
+        text = '⚠️ ' + BX.util.htmlspecialchars(msg);
+    } else {
+        color = 'danger';
+        text = '❌ ' + BX.util.htmlspecialchars(msg);
+    }
+
+    BX.UI.Notification.Center.notify({
+        content: text,
+        autoHideDelay: 5000,
+        position: 'top-right',
+        color: color
+    });
+
+    try {
+        const u = new URL(window.location.href);
+        ['created', 'warning', 'error'].forEach(p => u.searchParams.delete(p));
+        const cleanUrl = u.pathname + (u.searchParams.toString() ? '?' + u.searchParams : '');
+        history.replaceState(null, '', cleanUrl);
+    } catch(e) {}
+});
+</script>
+<?php endif; ?>
+
+<?php require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php"); ?>
