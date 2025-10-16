@@ -1,23 +1,247 @@
-// Добавляем администраторов
-foreach ($admins as $uid) {
-    $uid = (int)preg_replace('/^U/i', '', (string)$uid); // удаляем префикс U
-    if ($uid > 0) {
-        $groups = (array)\CUser::GetUserGroup($uid);
-        if (!in_array($adminRoleId, $groups, true)) {
-            $groups[] = $adminRoleId;
-            \CUser::SetUserGroup($uid, $groups);
+<?php
+namespace PortalHub;
+
+use Bitrix\Main\Loader;
+use Bitrix\Main\IO\Directory;
+
+class Manager
+{
+    /**
+     * Возвращает ID инфоблока portal_sites
+     */
+    public static function getPortalIblockId(): int
+    {
+        if (!Loader::includeModule('iblock')) {
+            return 0;
         }
+
+        $res = \CIBlock::GetList([], ['CODE' => 'portal_sites', 'CHECK_PERMISSIONS' => 'N']);
+        if ($ib = $res->Fetch()) {
+            return (int)$ib['ID'];
+        }
+
+        return 0;
     }
+
+    /**
+     * Санитаризация кода сайта
+     */
+    public static function sanitizeCode(string $code): string
+    {
+        $code = mb_strtolower(trim($code));
+        $code = preg_replace('/[^a-z0-9\-_]/', '-', $code);
+        return mb_substr($code, 0, 60);
+    }
+
+    /**
+     * Создаёт новый портал
+     */
+    public static function createPortalSite(
+        string $siteTitle,
+        string $siteCode,
+        string $roleName,
+        array $admins = [],
+        array $users = []
+    ): array {
+        if (!Loader::includeModule('iblock')) {
+            return ["success" => false, "message" => "Модуль инфоблоков не найден"];
+        }
+
+        $IBLOCK_ID = self::getPortalIblockId();
+        if ($IBLOCK_ID <= 0) {
+            return ["success" => false, "message" => "Инфоблок portal_sites не найден"];
+        }
+
+        $siteTitle = trim($siteTitle);
+        $siteCode  = self::sanitizeCode($siteCode);
+        $roleName  = trim($roleName);
+
+        if ($siteTitle === "" || $siteCode === "" || $roleName === "") {
+            return ["success" => false, "message" => "Название, код и роль обязательны"];
+        }
+
+        // Проверка на дубликаты
+        $exists = \CIBlockElement::GetList(
+            [],
+            [
+                "IBLOCK_ID" => $IBLOCK_ID,
+                [
+                    "LOGIC" => "OR",
+                    ["=NAME" => $siteTitle],
+                    ["=CODE" => $siteCode],
+                ]
+            ],
+            false,
+            false,
+            ["ID"]
+        )->Fetch();
+
+        if ($exists) {
+            return ["success" => false, "message" => "Сайт с таким названием или кодом уже существует"];
+        }
+
+        // Создаём группы
+        $g = new \CGroup;
+        $adminRoleId = $g->Add([
+            "ACTIVE" => "Y",
+            "C_SORT" => 100,
+            "NAME" => $roleName . " (Администраторы)",
+            "STRING_ID" => "portal_role_" . $siteCode,
+            "DESCRIPTION" => "Администраторы портала " . $siteTitle,
+        ]);
+
+        $g2 = new \CGroup;
+        $userRoleId = $g2->Add([
+            "ACTIVE" => "Y",
+            "C_SORT" => 200,
+            "NAME" => $roleName . " (Пользователи)",
+            "STRING_ID" => "portal_user_" . $siteCode,
+            "DESCRIPTION" => "Пользователи портала " . $siteTitle,
+        ]);
+
+        if (!$adminRoleId || !$userRoleId) {
+            return ["success" => false, "message" => "Не удалось создать группы пользователей"];
+        }
+
+        // Приводим входные данные к массиву
+        $admins = (array)$admins;
+        $users  = (array)$users;
+
+        // Удаляем возможные префиксы U
+        $admins = array_map(function ($id) {
+            return (int)preg_replace('/^U/i', '', (string)$id);
+        }, $admins);
+
+        $users = array_map(function ($id) {
+            return (int)preg_replace('/^U/i', '', (string)$id);
+        }, $users);
+
+        // Фильтруем нули и дубли
+        $admins = array_unique(array_filter($admins));
+        $users  = array_unique(array_filter($users));
+
+        // Добавляем администраторов в группу
+        foreach ($admins as $uid) {
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($adminRoleId, $groups, true)) {
+                $groups[] = $adminRoleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+
+        // Добавляем обычных пользователей
+        foreach ($users as $uid) {
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($userRoleId, $groups, true)) {
+                $groups[] = $userRoleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+
+        // Добавляем элемент инфоблока
+        $el = new \CIBlockElement;
+        $id = $el->Add([
+            "IBLOCK_ID" => $IBLOCK_ID,
+            "ACTIVE" => "Y",
+            "NAME" => $siteTitle,
+            "CODE" => $siteCode,
+            "PROPERTY_VALUES" => [
+                "SITE_ROLE" => $adminRoleId,
+                "SITE_USER_ROLE" => $userRoleId,
+            ],
+        ]);
+
+        if (!$id) {
+            return ["success" => false, "message" => "Ошибка при создании сайта: " . $el->LAST_ERROR];
+        }
+
+        // Создание структуры портала
+        $siteDir = $_SERVER['DOCUMENT_ROOT'] . "/local/portal_hub/sites/" . $siteCode;
+        if (!is_dir($siteDir)) {
+            Directory::createDirectory($siteDir);
+        }
+
+        $file = $siteDir . "/index.php";
+        if (!file_exists($file)) {
+            $tpl = <<<PHP
+<?php
+require(\$_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+\$APPLICATION->SetTitle("{$siteTitle}");
+
+use PortalHub\\Manager as PH;
+global \$USER;
+
+\$IBLOCK_ID = PH::getPortalIblockId();
+\$res = \\CIBlockElement::GetList([], ["IBLOCK_ID"=>\$IBLOCK_ID, "CODE"=>"{$siteCode}"], false, false, ["PROPERTY_SITE_ROLE","PROPERTY_SITE_USER_ROLE"]);
+if (\$row = \$res->Fetch()) {
+    \$adminId = (int)\$row["PROPERTY_SITE_ROLE_VALUE"];
+    \$userId  = (int)\$row["PROPERTY_SITE_USER_ROLE_VALUE"];
+}
+\$groups = (array)\$USER->GetUserGroupArray();
+
+if (in_array(\$adminId, \$groups)) {
+    echo "<h2>👑 Администратор портала</h2><p>Добро пожаловать на сайт {$siteTitle}.</p>";
+} elseif (in_array(\$userId, \$groups)) {
+    echo "<h2>👤 Пользователь портала</h2><p>У вас есть доступ к сайту {$siteTitle}.</p>";
+} else {
+    echo "<h2>🚫 Доступ запрещён</h2>";
 }
 
-// Добавляем обычных пользователей
-foreach ($users as $uid) {
-    $uid = (int)preg_replace('/^U/i', '', (string)$uid); // удаляем префикс U
-    if ($uid > 0) {
-        $groups = (array)\CUser::GetUserGroup($uid);
-        if (!in_array($userRoleId, $groups, true)) {
-            $groups[] = $userRoleId;
-            \CUser::SetUserGroup($uid, $groups);
+require(\$_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+PHP;
+            file_put_contents($file, $tpl);
         }
+
+        return ["success" => true, "id" => (int)$id];
+    }
+
+    /**
+     * Возвращает список порталов
+     */
+    public static function getPortalSites(array $userGroups): array
+    {
+        if (!Loader::includeModule('iblock')) {
+            return [];
+        }
+
+        $IBLOCK_ID = self::getPortalIblockId();
+        if ($IBLOCK_ID <= 0) {
+            return [];
+        }
+
+        global $USER;
+        $isAdmin = $USER->IsAdmin();
+
+        $filter = ["IBLOCK_ID" => $IBLOCK_ID, "ACTIVE" => "Y"];
+
+        if (!$isAdmin) {
+            $ug = array_map('intval', $userGroups);
+            $filter[] = [
+                "LOGIC" => "OR",
+                ["PROPERTY_SITE_ROLE" => $ug],
+                ["PROPERTY_SITE_USER_ROLE" => $ug],
+            ];
+        }
+
+        $sites = [];
+        $res = \CIBlockElement::GetList(
+            ["NAME" => "ASC"],
+            $filter,
+            false,
+            false,
+            ["ID", "NAME", "CODE", "PROPERTY_SITE_ROLE", "PROPERTY_SITE_USER_ROLE"]
+        );
+
+        while ($ar = $res->Fetch()) {
+            $sites[] = [
+                "ID" => (int)$ar["ID"],
+                "NAME" => $ar["NAME"],
+                "CODE" => $ar["CODE"],
+                "ROLE_ADMIN" => (int)$ar["PROPERTY_SITE_ROLE_VALUE"],
+                "ROLE_USER"  => (int)$ar["PROPERTY_SITE_USER_ROLE_VALUE"],
+            ];
+        }
+
+        return $sites;
     }
 }
