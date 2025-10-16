@@ -1,41 +1,92 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php");
 
-use PortalHub\Manager as PH;
+global $USER, $APPLICATION;
 
-global $USER;
-
-$code = (string)($_REQUEST['code'] ?? '');
-$code = trim($code);
-
-if ($code === '') {
-    ShowError('Сайт не найден');
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); return;
+if (!$USER->IsAdmin()) {
+    die('Access denied');
 }
 
-$el = PH::getSiteByCode($code);
-if (!$el) {
-    ShowError('Сайт не найден');
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); return;
+use Bitrix\Main\Loader;
+
+Loader::includeModule('iblock');
+
+function ensureIblockType($id, $name = 'Порталы') {
+    $res = CIBlockType::GetByID($id);
+    if ($res->Fetch()) { return true; }
+    $arFields = [
+        'ID' => $id,
+        'SECTIONS' => 'N',
+        'IN_RSS' => 'N',
+        'SORT' => 500,
+        'LANG' => [
+            'ru' => ['NAME' => $name],
+            'en' => ['NAME' => 'Portals'],
+        ],
+    ];
+    $ibt = new CIBlockType;
+    return (bool)$ibt->Add($arFields);
 }
 
-// Проверка доступа
-$roleId = (int)($el['PROPERTY_SITE_ROLE_VALUE'] ?? 0);
-$hasAccess = $roleId <= 0 || in_array($roleId, (array)$USER->GetUserGroupArray(), true) || $USER->IsAdmin();
-
-if (!$hasAccess) {
-    ShowError('Доступ запрещён');
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); return;
+function ensureIblock($type, $code, $name, $siteIds) {
+    $res = CIBlock::GetList([], ['TYPE' => $type, '=CODE' => $code], false);
+    if ($ib = $res->Fetch()) { return (int)$ib['ID']; }
+    $ib = new CIBlock;
+    $id = $ib->Add([
+        'ACTIVE' => 'Y',
+        'NAME'   => $name,
+        'CODE'   => $code,
+        'IBLOCK_TYPE_ID' => $type,
+        'SITE_ID' => $siteIds,
+        'GROUP_ID' => ['2' => 'R', '1' => 'X'], // все авторизованные - чтение, админы - полный
+    ]);
+    return (int)$id;
 }
 
-// TODO: здесь можно подключать ваши компоненты портала (dashboard, виджеты и т.д.)
-?><div style="padding:16px">
-    <h2 style="margin:0 0 12px"><?= htmlspecialcharsbx($el['NAME']) ?></h2>
-    <div class="ui-alert ui-alert-primary">
-        <span class="ui-alert-message">
-            Это заглушка страницы портала <b><?= htmlspecialcharsbx($el['CODE']) ?></b>. Подключите здесь ваши компоненты.
-        </span>
-    </div>
-</div><?php
+function ensureProperty($iblockId, $code, $name) {
+    $res = CIBlockProperty::GetList([], ['IBLOCK_ID' => $iblockId, '=CODE' => $code]);
+    if ($prop = $res->Fetch()) { return (int)$prop['ID']; }
+    $ibp = new CIBlockProperty;
+    $id = $ibp->Add([
+        'NAME' => $name,
+        'ACTIVE' => 'Y',
+        'SORT' => 100,
+        'CODE' => $code,
+        'PROPERTY_TYPE' => 'N', // Число (ID группы)
+        'IBLOCK_ID' => $iblockId,
+        'IS_REQUIRED' => 'N',
+        'MULTIPLE' => 'N'
+    ]);
+    return (int)$id;
+}
 
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+$run = isset($_REQUEST['run']) && $_REQUEST['run'] === '1';
+
+if (!$run) {
+    ?>
+    <form method="post">
+        <?= bitrix_sessid_post() ?>
+        <input type="hidden" name="run" value="1">
+        <button class="ui-btn ui-btn-success">Установить инфоблоки для Portal Hub</button>
+    </form>
+    <?php
+    die();
+}
+
+if (!check_bitrix_sessid()) { die('Bad sessid'); }
+
+// Получаем ID сайтов (привяжем ко всем)
+$siteIds = [];
+$rsSites = CSite::GetList($by="sort", $order="asc", []);
+while ($s = $rsSites->Fetch()) { $siteIds[] = $s['ID']; }
+if (empty($siteIds)) { $siteIds = ['s1']; }
+
+$ok = ensureIblockType('portal', 'Порталы');
+$ibId = ensureIblock('portal', 'portal_sites', 'Портальные сайты', $siteIds);
+$propId = $ibId > 0 ? ensureProperty($ibId, 'SITE_ROLE', 'ID группы роли') : 0;
+
+echo '<pre>';
+echo "Тип ИБ: " . ($ok ? "OK" : "FAIL") . PHP_EOL;
+echo "Инфоблок portal_sites: " . ($ibId > 0 ? "ID=$ibId" : "FAIL") . PHP_EOL;
+echo "Свойство SITE_ROLE: " . ($propId > 0 ? "ID=$propId" : "FAIL") . PHP_EOL;
+echo '</pre>';
