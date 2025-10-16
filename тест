@@ -1,57 +1,58 @@
 <script>
 BX.ready(function() {
+    const adminInput = document.getElementById('role_users_input');
+    const userInput  = document.getElementById('site_users_input');
+
+    function normalizeIds(items) {
+        return items
+            .map(i => String(i.id).replace(/^user:/, '').trim())
+            .filter(id => id !== '');
+    }
+
+    function updateAdmins(selector) {
+        adminInput.value = normalizeIds(selector.getSelectedItems()).join(',');
+        console.log('Admins:', adminInput.value);
+    }
+
+    function updateUsers(selector) {
+        userInput.value = normalizeIds(selector.getSelectedItems()).join(',');
+        console.log('Users:', userInput.value);
+    }
 
     // === Администраторы ===
     const adminSelector = new BX.UI.EntitySelector.TagSelector({
         id: 'portal_admins_selector',
-        textBoxWidth: '100%',
         multiple: true,
+        textBoxWidth: '100%',
         dialogOptions: {
             id: 'portal_admins_dialog',
             context: 'PORTAL_CREATE',
             entities: [{ id: 'user' }],
-            enableSearch: true,
-            width: 480
-        },
-        events: {
-            onChange: syncAdmins
+            enableSearch: true
         }
     });
     adminSelector.renderTo(document.getElementById('admin_tag_selector'));
 
-    // === Обычные пользователи ===
+    adminSelector.subscribe('onTagAdd',  () => updateAdmins(adminSelector));
+    adminSelector.subscribe('onTagRemove', () => updateAdmins(adminSelector));
+    adminSelector.subscribe('onClear', () => updateAdmins(adminSelector));
+
+    // === Пользователи ===
     const userSelector = new BX.UI.EntitySelector.TagSelector({
         id: 'portal_users_selector',
-        textBoxWidth: '100%',
         multiple: true,
+        textBoxWidth: '100%',
         dialogOptions: {
             id: 'portal_users_dialog',
             context: 'PORTAL_CREATE',
             entities: [{ id: 'user' }],
-            enableSearch: true,
-            width: 480
-        },
-        events: {
-            onChange: syncUsers
+            enableSearch: true
         }
     });
     userSelector.renderTo(document.getElementById('user_tag_selector'));
 
-    // === ВАЖНО: синхронизация скрытых полей ===
-    function syncAdmins() {
-        const ids = adminSelector.getTags()
-            .map(t => String(t.id).replace('user:', '').trim()) // <-- очищаем "user:"
-            .filter(v => v !== '');
-        document.getElementById('role_users_input').value = ids.join(',');
-        console.log('Администраторы:', ids); // для проверки
-    }
-
-    function syncUsers() {
-        const ids = userSelector.getTags()
-            .map(t => String(t.id).replace('user:', '').trim()) // <-- очищаем "user:"
-            .filter(v => v !== '');
-        document.getElementById('site_users_input').value = ids.join(',');
-        console.log('Пользователи:', ids); // для проверки
-    }
+    userSelector.subscribe('onTagAdd',  () => updateUsers(userSelector));
+    userSelector.subscribe('onTagRemove', () => updateUsers(userSelector));
+    userSelector.subscribe('onClear', () => updateUsers(userSelector));
 });
 </script>
