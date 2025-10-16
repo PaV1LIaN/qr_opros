@@ -3,105 +3,305 @@ if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
 global $USER;
 
 use Bitrix\Main\UI\Extension;
+use Bitrix\Main\UserGroupTable;
+use Bitrix\Main\UserTable;
 
-if (!$USER->IsAdmin()) return;
-
-// Загружаем Bitrix UI (кнопки/формы/селектор)
-Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.forms', 'main.core']);
+Extension::load(['ui.entity-selector', 'ui.buttons', 'ui.alerts', 'ui.notification', 'main.core']);
 ?>
 
-<div class="ui-block ui-block-section" style="padding:16px;">
-    <div class="ui-block-title">
-        <h3>Создать новый портал сайта</h3>
-    </div>
+<style>
+.portal-card {
+    background: #fff;
+    border: 1px solid #e3e7ec;
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    transition: all 0.2s ease;
+}
+.portal-card:hover {
+    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+    border-color: #dce2eb;
+}
+.portal-card h4 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+}
+.portal-meta {
+    color: #9ea5b4;
+    font-size: 13px;
+    margin-top: 4px;
+}
+.portal-users {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+.user-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: #f6f8fb;
+    border-radius: 20px;
+    font-size: 13px;
+    line-height: 1;
+}
+.user-pill .avatar {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    display: inline-block;
+}
+.user-pill .avatar.placeholder {
+    background: #d8dee9;
+}
+.portal-list-link {
+    text-decoration: none;
+    color: #0065ff;
+    display: block;
+    padding: 12px 16px;
+    background: #fff;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    transition: background 0.2s;
+}
+.portal-list-link:hover {
+    background: #f5f7fa;
+}
+</style>
 
-    <form method="post" action="" class="ui-form">
-        <?= bitrix_sessid_post() ?>
-        <input type="hidden" name="create_site" value="Y" />
+<div style="margin:24px 0;">
+    <h3 style="margin:0 0 16px; font-size:20px; font-weight:600;">Доступные сайты</h3>
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название сайта</div>
-            <div class="ui-form-content">
-                <input type="text" name="site_title" required class="ui-ctl ui-ctl-textbox">
-            </div>
+    <?php if (empty($sites)): ?>
+        <div class="ui-alert ui-alert-warning">
+            <span class="ui-alert-message">Нет доступных сайтов.</span>
         </div>
+    <?php else: ?>
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Код сайта (папка, латиница)</div>
-            <div class="ui-form-content">
-                <input type="text" name="site_code" class="ui-ctl ui-ctl-textbox" placeholder="Оставьте пустым — сгенерируем автоматически">
-            </div>
-        </div>
+        <?php if (!$USER->IsAdmin()): ?>
+            <!-- ======= ВИД ДЛЯ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ ======= -->
+            <?php foreach ($sites as $site): ?>
+                <?php
+                $siteName = htmlspecialcharsbx($site["NAME"]);
+                $siteCode = htmlspecialcharsbx($site["CODE"]);
+                ?>
+                <a href="/local/portal_hub/sites/<?= $siteCode ?>/" class="portal-list-link">
+                    <?= $siteName ?>
+                </a>
+            <?php endforeach; ?>
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название роли</div>
-            <div class="ui-form-content">
-                <input type="text" name="role_name" class="ui-ctl ui-ctl-textbox" placeholder="Например: Роль отдела продаж" required>
-            </div>
-        </div>
+        <?php else: ?>
+            <!-- ======= ВИД ДЛЯ АДМИНИСТРАТОРОВ ======= -->
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Пользователи роли</div>
-            <div class="ui-form-content">
-                <input type="hidden" name="role_users" id="role_users_input">
-                <div id="user-selector" style="margin-bottom:10px;"></div>
-                <button type="button" id="open-selector-btn" class="ui-btn ui-btn-light-border ui-btn-sm">
-                    Выбрать пользователей
-                </button>
-            </div>
-        </div>
+            <?php
+            // Сбор всех roleId -> получим участников пачкой через ORM
+            $roleIds = [];
+            foreach ($sites as $s) {
+                $rid = (int)($s["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
+                if ($rid > 0) { $roleIds[$rid] = true; }
+            }
+            $roleIds = array_keys($roleIds);
 
-        <div class="ui-form-row">
-            <button type="submit" class="ui-btn ui-btn-success">Создать сайт</button>
-        </div>
-    </form>
+            $membersByRole = [];
+            if (!empty($roleIds)) {
+                // user-group assignments
+                $rsAssign = UserGroupTable::getList([
+                    'filter' => ['@GROUP_ID' => $roleIds],
+                    'select' => ['USER_ID','GROUP_ID']
+                ]);
+                $groupToUserIds = [];
+                while ($row = $rsAssign->fetch()) {
+                    $gid = (int)$row['GROUP_ID']; $uid = (int)$row['USER_ID'];
+                    $groupToUserIds[$gid][] = $uid;
+                }
+
+                $allUserIds = [];
+                foreach ($groupToUserIds as $uids) { $allUserIds = array_merge($allUserIds, $uids); }
+                $allUserIds = array_values(array_unique($allUserIds));
+
+                $usersById = [];
+                if (!empty($allUserIds)) {
+                    $rsUsers = UserTable::getList([
+                        'filter' => ['@ID' => $allUserIds],
+                        'select' => ['ID','NAME','LAST_NAME','LOGIN','PERSONAL_PHOTO']
+                    ]);
+                    while ($u = $rsUsers->fetch()) {
+                        $name = trim((string)$u['NAME'] . ' ' . (string)$u['LAST_NAME']);
+                        if ($name === '') { $name = (string)$u['LOGIN']; }
+                        $usersById[(int)$u['ID']] = [
+                            'id' => (int)$u['ID'],
+                            'title' => $name,
+                            'photo' => (int)$u['PERSONAL_PHOTO']
+                        ];
+                    }
+                }
+
+                // Сборка членов по ролям + ресайз мини‑аватаров
+                foreach ($groupToUserIds as $gid => $uids) {
+                    $list = [];
+                    foreach ($uids as $uid) {
+                        if (!isset($usersById[$uid])) continue;
+                        $u = $usersById[$uid];
+                        $avatar = '';
+                        if (!empty($u['photo'])) {
+                            $file = \CFile::ResizeImageGet(
+                                $u['photo'],
+                                ['width' => 32, 'height' => 32],
+                                BX_RESIZE_IMAGE_EXACT,
+                                false
+                            );
+                            if (!empty($file['src'])) { $avatar = $file['src']; }
+                        }
+                        $list[] = [
+                            'id' => $u['id'],
+                            'title' => $u['title'],
+                            'avatar' => $avatar
+                        ];
+                    }
+                    $membersByRole[(int)$gid] = $list;
+                }
+            }
+            ?>
+
+            <?php foreach ($sites as $site): ?>
+                <?php
+                $siteId   = (int)$site["ID"];
+                $siteName = htmlspecialcharsbx($site["NAME"]);
+                $siteCode = htmlspecialcharsbx($site["CODE"]);
+                $roleId   = (int)($site["PROPERTY_SITE_ROLE_VALUE"] ?? 0);
+                $members  = $roleId > 0 ? ($membersByRole[$roleId] ?? []) : [];
+                ?>
+                <div class="portal-card" data-role-card="<?= $roleId ?>">
+                    <h4>
+                        <a href="/local/portal_hub/sites/<?= $siteCode ?>/"
+                           target="_blank"
+                           class="ui-link ui-link-primary">
+                           <?= $siteName ?>
+                        </a>
+                    </h4>
+                    <div class="portal-meta">Папка/роут: /local/portal_hub/sites/<?= $siteCode ?>/</div>
+                    <?php if ($roleId > 0): ?>
+                        <div class="portal-meta">Роль (ID группы): <?= $roleId ?></div>
+                    <?php else: ?>
+                        <div class="portal-meta">Роль не назначена — сайт виден всем</div>
+                    <?php endif; ?>
+
+                    <?php if ($roleId > 0): ?>
+                        <div class="portal-users" id="role-members-<?= $roleId ?>">
+                            <?php foreach ($members as $m): ?>
+                                <div class="user-pill" data-uid="<?= (int)$m['id'] ?>">
+                                    <span class="avatar <?= $m['avatar'] ? '' : 'placeholder' ?>" style="<?= $m['avatar'] ? 'background-image:url('.htmlspecialcharsbx($m['avatar']).')' : '' ?>"></span>
+                                    <span class="name"><?= htmlspecialcharsbx($m['title']) ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <div style="margin-top:10px;">
+                            <button type="button"
+                                    class="ui-btn ui-btn-light-border ui-btn-sm"
+                                    data-open-selector
+                                    data-role-id="<?= $roleId ?>">
+                                Изменить участников
+                            </button>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+    <?php endif; ?>
 </div>
 
 <script>
 BX.ready(function () {
-    var openBtn = document.getElementById('open-selector-btn');
-    var container = document.getElementById('user-selector');
-    var hiddenInput = document.getElementById('role_users_input');
+    // Делегирование на все карточки с ролями
+    document.body.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-open-selector]');
+        if (!btn) return;
 
-    if (!openBtn) return;
+        var roleId = parseInt(btn.getAttribute('data-role-id'), 10);
+        if (!roleId) return;
 
-    var dialog = new BX.UI.EntitySelector.Dialog({
-        id: 'portal-hub-user-selector',
-        targetNode: openBtn,
-        context: 'PORTAL_HUB_USER_SELECT',
-        entities: [{ id: 'user' }],
-        multiple: true,
-        enableSearch: true,
-        width: 500,
-        dropdownMode: false,
-        events: {
-            'Item:onSelect': updateView,
-            'Item:onDeselect': updateView
+        var containerId = 'role-members-' + roleId;
+        var membersWrap = document.getElementById(containerId);
+        var preselected = [];
+        if (membersWrap) {
+            var pills = membersWrap.querySelectorAll('.user-pill');
+            pills.forEach(function (p) {
+                var uid = parseInt(p.getAttribute('data-uid'), 10);
+                if (uid) preselected.push(uid);
+            });
         }
-    });
 
-    function updateView() {
-        var items = dialog.getSelectedItems();
-        // Обновляем скрытое поле
-        hiddenInput.value = items.map(function (i) { return i.id; }).join(',');
-
-        // Отрисовываем лейблы
-        container.innerHTML = '';
-        items.forEach(function (i) {
-            var el = document.createElement('div');
-            el.className = 'ui-label ui-label-light ui-label-fill-light';
-            el.style.margin = '4px';
-            el.innerHTML = '<span class="ui-label-inner">' + BX.util.htmlspecialchars(i.getTitle()) + '</span>';
-            container.appendChild(el);
+        var dialog = new BX.UI.EntitySelector.Dialog({
+            id: 'portal-hub-role-' + roleId,
+            context: 'PORTAL_HUB_ROLE_EDIT_' + roleId,
+            entities: [{ id: 'user' }],
+            multiple: true,
+            enableSearch: true,
+            width: 520,
+            dropdownMode: false
         });
-    }
 
-    openBtn.addEventListener('click', function () {
-        if (typeof BX === 'undefined' || !BX.UI || !BX.UI.EntitySelector) {
-            alert('UI Entity Selector не загружен. Убедитесь, что страница подключает header.php.');
-            return;
-        }
         dialog.show();
+
+        // Небольшая задержка, чтобы диалог успел инициализироваться
+        setTimeout(function () {
+            // Проставим выбранные элементы вручную по id
+            preselected.forEach(function (id) {
+                var item = dialog.getItemById('user', id);
+                if (item) { item.select(); }
+            });
+        }, 100);
+
+        dialog.subscribe('onSave', function () {
+            var items = dialog.getSelectedItems();
+            var ids = items.map(function (i) { return parseInt(i.id, 10); }).filter(Boolean);
+
+            BX.ajax({
+                url: window.location.pathname,
+                method: 'POST',
+                dataType: 'json',
+                data: {
+                    AJAX: 'UPDATE_ROLE',
+                    sessid: BX.bitrix_sessid(),
+                    ROLE_ID: roleId,
+                    'ROLE_USERS': ids
+                },
+                onsuccess: function (res) {
+                    if (res && res.status === 'success') {
+                        BX.UI.Notification.Center.notify({
+                            content: '✅ Состав роли обновлён',
+                            autoHideDelay: 3000,
+                            position: 'top-right',
+                            category: 'portal_hub'
+                        });
+                        // Обновим страницу, чтобы перерисовать аватарки и список
+                        location.reload();
+                    } else {
+                        BX.UI.Notification.Center.notify({
+                            content: '⚠️ Не удалось обновить роль',
+                            autoHideDelay: 4000,
+                            color: 'warning',
+                            position: 'top-right',
+                            category: 'portal_hub'
+                        });
+                    }
+                },
+                onfailure: function () {
+                    BX.UI.Notification.Center.notify({
+                        content: '❌ Ошибка запроса',
+                        autoHideDelay: 4000,
+                        color: 'danger',
+                        position: 'top-right',
+                        category: 'portal_hub'
+                    });
+                }
+            });
+        });
     });
 });
 </script>
