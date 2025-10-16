@@ -1,119 +1,148 @@
 <?php
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 
-use Bitrix\Main\UI\Extension;
-Extension::load(['ui.forms', 'ui.buttons', 'ui.entity-selector', 'main.core']);
+// --- AJAX обновление ролей ---
+if (isset($_POST['AJAX']) && $_POST['AJAX'] === 'UPDATE_ROLE') {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
+    global $USER;
+
+    if ($USER->IsAdmin() && check_bitrix_sessid()) {
+        $roleId = (int)($_POST['ROLE_ID'] ?? 0);
+        $roleUsers = array_map('intval', (array)($_POST['ROLE_USERS'] ?? []));
+        $current = [];
+
+        $rs = \CUser::GetList($b = "id", $o = "asc", ["GROUPS_ID" => [$roleId]], ["FIELDS" => ["ID"]]);
+        while ($u = $rs->Fetch()) {
+            $current[] = (int)$u["ID"];
+        }
+
+        $add = array_diff($roleUsers, $current);
+        $del = array_diff($current, $roleUsers);
+
+        foreach ($add as $uid) {
+            $uid = (int)$uid;
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($roleId, $groups, true)) {
+                $groups[] = $roleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+
+        foreach ($del as $uid) {
+            $uid = (int)$uid;
+            $groups = (array)\CUser::GetUserGroup($uid);
+            $groups = array_diff($groups, [$roleId]);
+            \CUser::SetUserGroup($uid, $groups);
+        }
+
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(["status" => "success"]);
+        die();
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(["status" => "error"]);
+    die();
+}
+
+// --- Основной рендер ---
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+use Bitrix\Main\Loader;
+use PortalHub\Manager as PH;
+
+Loader::includeModule("iblock");
+require_once __DIR__ . "/lib/functions.php";
 
 global $USER;
-if (!$USER->IsAdmin()):
-?>
-<div class="ui-alert ui-alert-warning">
-    <span class="ui-alert-message">У вас нет прав для создания порталов.</span>
-</div>
-<?php return; endif; ?>
 
-<div class="ui-card" style="padding:24px; border-radius:12px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.06); max-width:900px;">
-    <h3 style="margin-bottom:18px; font-size:20px; font-weight:600;">Создание нового портала</h3>
+// === Обработка создания сайта ===
+if (
+    $USER->IsAdmin() &&
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    check_bitrix_sessid() &&
+    ($_POST['create_site'] ?? '') === 'Y'
+) {
+    $siteTitle = trim($_POST['site_title'] ?? '');
+    $siteCode  = trim($_POST['site_code'] ?? '');
+    $roleName  = trim($_POST['role_name'] ?? '');
 
-    <form method="post">
-        <?= bitrix_sessid_post() ?>
-        <input type="hidden" name="create_site" value="Y">
-        <input type="hidden" name="role_users" id="role_users_input">
-        <input type="hidden" name="site_users" id="site_users_input">
+    // Администраторы
+    $admins = array_filter(array_map('intval', explode(',', $_POST['role_users'] ?? '')));
+    // Обычные пользователи
+    $users  = array_filter(array_map('intval', explode(',', $_POST['site_users'] ?? '')));
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название сайта</div>
-            <div class="ui-form-content">
-                <div class="ui-ctl ui-ctl-textbox">
-                    <input type="text" name="site_title" class="ui-ctl-element" required>
-                </div>
-            </div>
-        </div>
+    $result = PH::createPortalSite($siteTitle, $siteCode, $roleName, $admins, $users);
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Код сайта (папка)</div>
-            <div class="ui-form-content">
-                <div class="ui-ctl ui-ctl-textbox">
-                    <input type="text" name="site_code" class="ui-ctl-element" required>
-                </div>
-            </div>
-        </div>
+    $clean = ["create_site", "created", "warning", "error"];
+    if (!empty($result["success"])) {
+        LocalRedirect($APPLICATION->GetCurPageParam("created=" . rawurlencode($siteTitle), $clean));
+        die();
+    } elseif (($result["status"] ?? "") === "exists") {
+        LocalRedirect($APPLICATION->GetCurPageParam("warning=" . rawurlencode($result["message"]), $clean));
+        die();
+    } else {
+        LocalRedirect($APPLICATION->GetCurPageParam("error=" . rawurlencode($result["message"]), $clean));
+        die();
+    }
+}
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Название роли</div>
-            <div class="ui-form-content">
-                <div class="ui-ctl ui-ctl-textbox">
-                    <input type="text" name="role_name" class="ui-ctl-element" required>
-                </div>
-            </div>
-        </div>
+// === Список сайтов ===
+$userGroups = (array)$USER->GetUserGroupArray();
+$sites = PH::getPortalSites($userGroups);
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Администраторы сайта</div>
-            <div class="ui-form-content">
-                <div id="admin_tag_selector"></div>
-            </div>
-        </div>
+// Подключаем шаблоны
+require __DIR__ . "/templates/form.php";
+require __DIR__ . "/templates/list.php";
 
-        <div class="ui-form-row">
-            <div class="ui-form-label">Обычные пользователи</div>
-            <div class="ui-form-content">
-                <div id="user_tag_selector"></div>
-            </div>
-        </div>
+// === Уведомления ===
+$type = '';
+$msg = '';
+if (!empty($_GET['created'])) {
+    $type = 'success';
+    $msg = $_GET['created'];
+} elseif (!empty($_GET['warning'])) {
+    $type = 'warning';
+    $msg = $_GET['warning'];
+} elseif (!empty($_GET['error'])) {
+    $type = 'error';
+    $msg = $_GET['error'];
+}
 
-        <div class="ui-form-row" style="margin-top:16px;">
-            <button type="submit" class="ui-btn ui-btn-success">Создать сайт</button>
-        </div>
-    </form>
-</div>
-
+if ($type): ?>
 <script>
 BX.ready(function() {
-    // TagSelector для администраторов
-    const adminSelector = new BX.UI.EntitySelector.TagSelector({
-        id: 'portal_admins_create',
-        textBoxWidth: '100%',
-        multiple: true,
-        dialogOptions: {
-            id: 'portal_admins_dialog',
-            context: 'PORTAL_CREATE',
-            entities: [{ id: 'user' }],
-            enableSearch: true,
-            width: 500
-        },
-        events: {
-            onChange: syncAdmins
-        }
-    });
-    adminSelector.renderTo(document.getElementById('admin_tag_selector'));
+    const type = '<?= CUtil::JSEscape($type) ?>';
+    const msg  = '<?= CUtil::JSEscape($msg) ?>';
+    let color = '', text = '';
 
-    // TagSelector для обычных пользователей
-    const userSelector = new BX.UI.EntitySelector.TagSelector({
-        id: 'portal_users_create',
-        textBoxWidth: '100%',
-        multiple: true,
-        dialogOptions: {
-            id: 'portal_users_dialog',
-            context: 'PORTAL_CREATE',
-            entities: [{ id: 'user' }],
-            enableSearch: true,
-            width: 500
-        },
-        events: {
-            onChange: syncUsers
-        }
-    });
-    userSelector.renderTo(document.getElementById('user_tag_selector'));
-
-    function syncAdmins() {
-        const ids = adminSelector.getTags().map(t => t.id);
-        document.getElementById('role_users_input').value = ids.join(',');
+    if (type === 'success') {
+        text = '✅ Сайт <b>' + BX.util.htmlspecialchars(msg) + '</b> успешно создан!';
+    } else if (type === 'warning') {
+        color = 'warning';
+        text = '⚠️ ' + BX.util.htmlspecialchars(msg);
+    } else {
+        color = 'danger';
+        text = '❌ ' + BX.util.htmlspecialchars(msg);
     }
 
-    function syncUsers() {
-        const ids = userSelector.getTags().map(t => t.id);
-        document.getElementById('site_users_input').value = ids.join(',');
-    }
+    BX.UI.Notification.Center.notify({
+        content: text,
+        autoHideDelay: 5000,
+        position: 'top-right',
+        color: color
+    });
+
+    // очищаем URL
+    try {
+        const u = new URL(window.location.href);
+        ['created', 'warning', 'error'].forEach(p => u.searchParams.delete(p));
+        const cleanUrl = u.pathname + (u.searchParams.toString() ? '?' + u.searchParams : '');
+        history.replaceState(null, '', cleanUrl);
+    } catch(e) {}
 });
 </script>
+<?php endif; ?>
+
+<?php require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php"); ?>
