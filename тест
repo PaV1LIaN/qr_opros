@@ -1,62 +1,97 @@
-<?php if ($USER->IsAdmin()): ?>
-<script>
-BX.ready(function () {
-    const BX_SESSID = '<?= bitrix_sessid() ?>';
-
-    function saveRole(roleId, userIds, onDone) {
-        const fd = new FormData();
-        fd.append('AJAX', 'UPDATE_ROLE');
-        fd.append('sessid', BX_SESSID);
-        fd.append('ROLE_ID', roleId);
-        userIds.forEach(id => fd.append('ROLE_USERS[]', id));
-
-        fetch(location.href, { method: 'POST', body: fd, credentials: 'same-origin' })
-            .then(r => r.json())
-            .then(data => onDone && onDone(data))
-            .catch(() => onDone && onDone({ status: 'error' }));
+public static function createPortalSite(string $siteTitle, string $siteCode, string $roleName, array $admins = [], array $users = []): array
+{
+    if (!Loader::includeModule('iblock')) {
+        return ["success" => false, "message" => "Модуль инфоблоков не найден"];
     }
 
-    function openSelector(btn, containerId) {
-        const roleId = btn.dataset.roleId;
-        const saveStatus = document.getElementById('save-status-' + roleId);
-        let currentUsers = [];
-        try { currentUsers = JSON.parse(btn.dataset.users) || []; } catch(e) {}
-
-        const dialog = new BX.UI.EntitySelector.Dialog({
-            id: 'portal-hub-role-' + roleId,
-            context: 'PORTAL_HUB_ROLE_EDIT',
-            targetNode: btn,
-            entities: [{ id: 'user' }],
-            multiple: true,
-            enableSearch: true,
-            width: 500,
-            dropdownMode: false,
-            selectedItems: currentUsers.map(u => ({ entityId: 'user', id: String(u.id) }))
-        });
-
-        dialog.subscribe('onHide', () => {
-            const items = dialog.getSelectedItems();
-            const ids = items.map(i => i.id);
-            saveStatus.innerHTML = '<div class="ui-alert ui-alert-primary"><span class="ui-alert-message">Сохраняем...</span></div>';
-            saveRole(roleId, ids, data => {
-                if (data.status === 'success') {
-                    saveStatus.innerHTML = '<div class="ui-alert ui-alert-success"><span class="ui-alert-message">Изменения сохранены.</span></div>';
-                    setTimeout(() => saveStatus.innerHTML = '', 2500);
-                } else {
-                    saveStatus.innerHTML = '<div class="ui-alert ui-alert-danger"><span class="ui-alert-message">Ошибка при сохранении.</span></div>';
-                }
-            });
-        });
-
-        dialog.show();
+    $IBLOCK_ID = self::getPortalIblockId();
+    if ($IBLOCK_ID <= 0) {
+        return ["success" => false, "message" => "Инфоблок 'portal_sites' не найден"];
     }
 
-    BX.bindDelegate(document.body, 'click', {className: 'js-edit-role'}, function(e) {
-        openSelector(e.target, 'user-selector-admin-' + e.target.dataset.roleId);
-    });
-    BX.bindDelegate(document.body, 'click', {className: 'js-edit-user-role'}, function(e) {
-        openSelector(e.target, 'user-selector-user-' + e.target.dataset.roleId);
-    });
-});
-</script>
-<?php endif; ?>
+    $siteTitle = trim($siteTitle);
+    $siteCode  = self::sanitizeCode(trim($siteCode));
+    $roleName  = trim($roleName);
+
+    if ($siteTitle === "" || $siteCode === "" || $roleName === "") {
+        return ["success" => false, "message" => "Название, код и роль обязательны"];
+    }
+
+    // Проверяем дубликаты
+    $exists = \CIBlockElement::GetList([], [
+        "IBLOCK_ID" => $IBLOCK_ID,
+        [
+            "LOGIC" => "OR",
+            ["=NAME" => $siteTitle],
+            ["=CODE" => $siteCode],
+        ]
+    ])->Fetch();
+
+    if ($exists) {
+        return ["success" => false, "status" => "exists", "message" => "Сайт с таким названием или кодом уже существует"];
+    }
+
+    // Создаём группы
+    $g = new \CGroup;
+    $adminRoleId = $g->Add([
+        "ACTIVE" => "Y",
+        "C_SORT" => 100,
+        "NAME" => $roleName . " (Администраторы)",
+        "STRING_ID" => "portal_role_" . $siteCode
+    ]);
+
+    $g2 = new \CGroup;
+    $userRoleId = $g2->Add([
+        "ACTIVE" => "Y",
+        "C_SORT" => 200,
+        "NAME" => $roleName . " (Пользователи)",
+        "STRING_ID" => "portal_user_" . $siteCode
+    ]);
+
+    if (!$adminRoleId || !$userRoleId) {
+        return ["success" => false, "message" => "Не удалось создать группы пользователей"];
+    }
+
+    // Добавляем администраторов
+    foreach ($admins as $uid) {
+        $uid = (int)$uid;
+        if ($uid > 0) {
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($adminRoleId, $groups, true)) {
+                $groups[] = $adminRoleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+    }
+
+    // Добавляем обычных пользователей
+    foreach ($users as $uid) {
+        $uid = (int)$uid;
+        if ($uid > 0) {
+            $groups = (array)\CUser::GetUserGroup($uid);
+            if (!in_array($userRoleId, $groups, true)) {
+                $groups[] = $userRoleId;
+                \CUser::SetUserGroup($uid, $groups);
+            }
+        }
+    }
+
+    // Добавляем элемент инфоблока
+    $el = new \CIBlockElement;
+    $id = $el->Add([
+        "IBLOCK_ID" => $IBLOCK_ID,
+        "ACTIVE" => "Y",
+        "NAME" => $siteTitle,
+        "CODE" => $siteCode,
+        "PROPERTY_VALUES" => [
+            "SITE_ROLE" => $adminRoleId,
+            "SITE_USER_ROLE" => $userRoleId,
+        ],
+    ]);
+
+    if (!$id) {
+        return ["success" => false, "message" => "Ошибка при создании сайта: " . $el->LAST_ERROR];
+    }
+
+    return ["success" => true, "id" => (int)$id];
+}
