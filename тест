@@ -1,168 +1,81 @@
-<?php
-/**
- * Публичная страница-”сайт” для администраторов.
- * Здесь форма + обработчик. По сабмиту дергаем Local\Siteforge\SiteFactory.
- *
- * Почему публичная? Вы просили реализовать как сайт (а не модуль).
- * Доступ ограничиваем .access.php и дополнительной проверкой в рантайме.
- */
-
-use Bitrix\Main\Loader;
-use Bitrix\Main\Context;
-use Local\Siteforge\SiteFactory;
-
-require $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
-$APPLICATION->SetTitle('SiteForge — создание подсайтов');
-
-if (!Loader::includeModule('main')) {
-    ShowError('Модуль main недоступен.');
-    require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
-    die();
-}
-
-// Дополнительная защита: пропускаем только администраторов портала (ID=1 или флаг isAdmin)
-global $USER;
-if (!$USER->IsAuthorized() || !$USER->IsAdmin()) {
-    $APPLICATION->AuthForm('Доступ запрещён.');
-}
-
-require_once __DIR__.'/lib/SiteFactory.php';
-
-$request = Context::getCurrent()->getRequest();
-$errors  = [];
-$success = null;
-
-if ($request->isPost() && check_bitrix_sessid()) {
-    $siteName   = trim((string)$request->getPost('SITE_NAME'));
-    $folderName = trim((string)$request->getPost('FOLDER_NAME'));
-    $admins     = (array)$request->getPost('ADMINS');
-    $users      = (array)$request->getPost('USERS');
-
-    // Валидация полей
-    if ($siteName === '') {
-        $errors[] = 'Заполните "Название сайта".';
-    }
-    if ($folderName === '' || !preg_match('~^[a-z0-9\-\_]+$~i', $folderName)) {
-        $errors[] = 'Неверное "Название папки": допустимы латиница/цифры/-/_.';
-    }
-    // Не позволяем одному пользователю быть и там и там
-    $intersect = array_intersect((array)$admins, (array)$users);
-    if (!empty($intersect)) {
-        $errors[] = 'Пользователь не может одновременно быть админом и пользователем этого сайта.';
-    }
-
-    if (empty($errors)) {
-        try {
-            $factory = new SiteFactory();
-
-            // Шаг 1: создаём сайт (папка + запись в b_site)
-            $creation = $factory->createSite([
-                'SITE_NAME'   => $siteName,
-                'FOLDER_NAME' => $folderName,
-            ]);
-
-            // Шаг 2: группы и назначение людей
-            $groupInfo = $factory->createGroupsAndAssignUsers([
-                'SITE_CODE' => $creation['SITE_LID'],
-                'ADMINS'    => $admins,
-                'USERS'     => $users,
-            ]);
-
-            // Шаг 3: права на файловую директорию
-            $factory->applyFsPermissions([
-                'FOLDER_ABS'     => $creation['FOLDER_ABS'],
-                'ADMIN_GROUP_ID' => $groupInfo['ADMIN_GROUP_ID'],
-                'USER_GROUP_ID'  => $groupInfo['USER_GROUP_ID'],
-            ]);
-
-            $success = sprintf(
-                'Сайт "%s" создан. Код (LID): %s. Папка: %s',
-                htmlspecialcharsbx($siteName),
-                htmlspecialcharsbx($creation['SITE_LID']),
-                htmlspecialcharsbx($creation['FOLDER_ABS'])
-            );
-
-        } catch (\Throwable $e) {
-            $errors[] = 'Ошибка: ' . htmlspecialcharsbx($e->getMessage());
+    /**
+     * Вернёт активные сайты, созданные SiteForge (DIR начинается с /local/siteforge/).
+     * Каждый элемент: ['LID','NAME','DIR']
+     */
+    public function listSites(): array
+    {
+        $out = [];
+        $res = \CSite::GetList($by='NAME', $order='asc', [
+            'ACTIVE' => 'Y',
+        ]);
+        while ($s = $res->Fetch()) {
+            // фильтруем только наши
+            if (!empty($s['DIR']) && str_starts_with($s['DIR'], $this->rootRel . '/')) {
+                $out[] = [
+                    'LID'  => $s['LID'],
+                    'NAME' => $s['NAME'],
+                    'DIR'  => $s['DIR'],
+                ];
+            }
         }
+        return $out;
     }
-}
 
-// Подготовим список пользователей (активные)
-$usersList = [];
-$rs = CUser::GetList($by='ID', $order='asc', ['ACTIVE'=>'Y'], ['FIELDS'=>['ID','NAME','LAST_NAME','LOGIN','EMAIL']]);
-while ($u = $rs->Fetch()) {
-    $title = trim($u['LAST_NAME'].' '.$u['NAME']);
-    if ($title === '') { $title = $u['LOGIN']; }
-    $title .= ' ['.$u['ID'].']';
-    if (!empty($u['EMAIL'])) { $title .= ' <'.$u['EMAIL'].'>'; }
-    $usersList[] = ['ID'=>$u['ID'], 'TITLE'=>$title];
-}
+    /**
+     * По коду сайта (LID) возвращает IDs групп Admins/Users.
+     * Возвращает: ['ADMIN_GROUP_ID'=>int|null, 'USER_GROUP_ID'=>int|null]
+     */
+    public function resolveSiteGroupIdsByLid(string $lid): array
+    {
+        $adminName = "[{$lid}] Site Admins";
+        $userName  = "[{$lid}] Site Users";
 
-// Вывод сообщений
-if (!empty($errors)) {
-    echo '<div class="ui-alert ui-alert-danger" style="margin:15px 0">';
-    foreach ($errors as $err) {
-        echo '<div>'.htmlspecialcharsbx($err).'</div>';
+        $adminId = $this->findGroupIdByNameOrStringId($adminName);
+        $userId  = $this->findGroupIdByNameOrStringId($userName);
+
+        return [
+            'ADMIN_GROUP_ID' => $adminId,
+            'USER_GROUP_ID'  => $userId,
+        ];
     }
-    echo '</div>';
-}
-if ($success) {
-    echo '<div class="ui-alert ui-alert-success" style="margin:15px 0">'. $success .'</div>';
-}
-?>
 
-<!-- Простая форма (без внешних зависимостей).
-     В бою можно заменить мультиселекты на bitrix:ui.selector -->
-<form method="post" action="">
-    <?=bitrix_sessid_post()?>
+    /**
+     * Проверяет, состоит ли пользователь хотя бы в одной группе сайта.
+     * true => можно заходить (и файловые права пропустят).
+     */
+    public function userHasAccessToSite(string $lid, int $userId): bool
+    {
+        if ($userId <= 0) { return false; }
+        $ids = $this->resolveSiteGroupIdsByLid($lid);
+        $userGroups = \CUser::GetUserGroup($userId);
+        if (!is_array($userGroups)) { $userGroups = []; }
+        $userGroups = array_map('intval', $userGroups);
 
-    <div style="max-width:820px;padding:16px;border:1px solid #e1e6eb;border-radius:8px">
-        <h2 style="margin-top:0">Создание нового сайта</h2>
+        foreach (['ADMIN_GROUP_ID','USER_GROUP_ID'] as $k) {
+            if (!empty($ids[$k]) && in_array((int)$ids[$k], $userGroups, true)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        <div style="margin:12px 0">
-            <label><b>Название сайта</b></label><br>
-            <input type="text" name="SITE_NAME" value="<?=htmlspecialcharsbx($request->getPost('SITE_NAME'))?>" style="width:100%;max-width:520px">
-        </div>
+    /** ===== internal helpers ===== */
 
-        <div style="margin:12px 0">
-            <label><b>Название папки</b> <small>/local/siteforge/<u>ваша_папка</u></small></label><br>
-            <input type="text" name="FOLDER_NAME" value="<?=htmlspecialcharsbx($request->getPost('FOLDER_NAME'))?>" style="width:100%;max-width:320px">
-        </div>
+    protected function findGroupIdByNameOrStringId(string $name): ?int
+    {
+        $stringId = $this->slugifyStringId($name);
 
-        <div style="margin:18px 0;padding-top:6px;border-top:1px dashed #ddd">
-            <h3 style="margin:8px 0">Пользователи</h3>
+        // 1) Ищем по STRING_ID
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
 
-            <div style="display:flex;gap:24px;flex-wrap:wrap">
-                <div>
-                    <div>Администраторы сайта (множественный выбор):</div>
-                    <select name="ADMINS[]" multiple size="10" style="min-width:360px">
-                        <?php foreach ($usersList as $u): ?>
-                            <option value="<?=$u['ID']?>" <?=(in_array($u['ID'], (array)$request->getPost('ADMINS') ?? [], true) ? 'selected' : '')?>>
-                                <?=htmlspecialcharsbx($u['TITLE'])?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
+        // 2) Ищем по NAME (на случай, если STRING_ID в базе иной)
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
 
-                <div>
-                    <div>Пользователи сайта (множественный выбор):</div>
-                    <select name="USERS[]" multiple size="10" style="min-width:360px">
-                        <?php foreach ($usersList as $u): ?>
-                            <option value="<?=$u['ID']?>" <?=(in_array($u['ID'], (array)$request->getPost('USERS') ?? [], true) ? 'selected' : '')?>>
-                                <?=htmlspecialcharsbx($u['TITLE'])?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <div style="margin-top:16px">
-            <button type="submit" class="ui-btn ui-btn-primary">Создать сайт</button>
-        </div>
-    </div>
-</form>
-
-<?php
-require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
+        return null;
+    }
