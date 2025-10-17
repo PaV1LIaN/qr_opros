@@ -1,1 +1,16 @@
-$creation = $factory->createSite([...]);
+$isExisting = !empty($creation['EXISTS']);
+if (!isset($_SESSION)) { session_start(); }
+$_SESSION['SITEFORGE_SUCCESS'] = $isExisting
+    ? sprintf(
+        'Сайт с такой папкой уже существовал. Код (LID): %s. Папка: %s',
+        htmlspecialcharsbx($creation['SITE_LID']),
+        htmlspecialcharsbx($creation['FOLDER_ABS'])
+      )
+    : sprintf(
+        'Сайт "%s" создан. Код (LID): %s. Папка: %s',
+        htmlspecialcharsbx($siteName),
+        htmlspecialcharsbx($creation['SITE_LID']),
+        htmlspecialcharsbx($creation['FOLDER_ABS'])
+      );
+LocalRedirect($APPLICATION->GetCurPageParam('', ['sessid']));
+
