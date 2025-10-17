@@ -1,1 +1,3 @@
-При выполнении скрипта возникла ошибка. Включить расширенный вывод ошибок можно в файле настроек .settings.php
+[Error] 
+Class "CAdminMessage" not found (0)
+/srv/bx/docroot/local/siteforge/index.php:17
