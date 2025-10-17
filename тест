@@ -1,331 +1,81 @@
 <?php
 /**
- * Local\Siteforge\SiteFactory
- * Создание папки сайта, регистрация в b_site (с региональными настройками),
- * создание групп, назначение прав, список сайтов и проверка доступа.
+ * Плитки всех подсайтов проекта SiteForge.
+ * Видят все авторизованные пользователи.
+ * У кого нет доступа — карточка "серая" и без ссылки.
  */
 
-namespace Local\Siteforge;
+if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
 
-use Bitrix\Main\Application;
-use Bitrix\Main\IO\Directory;
 use Bitrix\Main\Loader;
-use Bitrix\Main\ArgumentException;
-use Bitrix\Main\SystemException;
-use Bitrix\Main\Context;
 
-class SiteFactory
-{
-    protected string $rootRel = '/local/siteforge';
-    protected string $rootAbs;
+if (!Loader::includeModule('main')) { return; }
 
-    public function __construct()
-    {
-        $this->rootAbs = Application::getDocumentRoot() . $this->rootRel;
-    }
+require_once $_SERVER['DOCUMENT_ROOT'].'/local/siteforge/lib/SiteFactory.php';
 
-    /**
-     * Создание сайта: папка + index.php + запись в b_site (+ культура/сервер).
-     * @param array{SITE_NAME:string,FOLDER_NAME:string} $params
-     * @return array{SITE_LID:string,FOLDER_ABS:string,FOLDER_REL:string}
-     */
-    public function createSite(array $params): array
-    {
-        Loader::includeModule('main');
+global $USER;
+if (!$USER->IsAuthorized()) {
+    echo '<div class="ui-alert ui-alert-warning" style="margin:16px 0">Пожалуйста, авторизуйтесь, чтобы видеть доступные сайты.</div>';
+    return;
+}
 
-        $siteName   = trim((string)($params['SITE_NAME'] ?? ''));
-        $folderName = trim((string)($params['FOLDER_NAME'] ?? ''));
+$factory = new \Local\Siteforge\SiteFactory();
 
-        if ($siteName === '') {
-            throw new ArgumentException('SITE_NAME required');
-        }
-        if ($folderName === '' || !preg_match('~^[a-z0-9\-\_]+$~i', $folderName)) {
-            throw new ArgumentException('FOLDER_NAME invalid (allowed: a-z, 0-9, -, _)');
-        }
+// Короткий кеш списка сайтов
+$cacheTtl = 60;
+$cacheId  = 'siteforge_list_v1';
+$cacheDir = '/siteforge_list';
 
-        $siteFolderAbs = $this->rootAbs . '/' . $folderName;
-        $siteFolderRel = $this->rootRel . '/' . $folderName . '/'; // с завершающим слэшем
+$cache = new CPHPCache();
+$sites = [];
 
-        // Корневая папка проекта
-        if (!Directory::isDirectoryExists($this->rootAbs)) {
-            Directory::createDirectory($this->rootAbs);
-        }
-
-        // Антидубли: папка на ФС
-        if (Directory::isDirectoryExists($siteFolderAbs)) {
-            throw new SystemException('Folder already exists: ' . $siteFolderAbs);
-        }
-
-        // Антидубли: запись с таким DIR уже есть в b_site?
-        $exists = \CSite::GetList($by='sort', $order='asc', ['=DIR' => $siteFolderRel])->Fetch();
-        if ($exists) {
-            throw new SystemException('Site with this DIR already exists in b_site: ' . $siteFolderRel);
-        }
-
-        Directory::createDirectory($siteFolderAbs);
-
-        // Минимальный index.php
-        $indexPhp = $siteFolderAbs . '/index.php';
-        $indexContent = <<<'PHP'
-<?php
-require $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
-$APPLICATION->SetTitle('Новый сайт');
-?>
-<h1>Добро пожаловать!</h1>
-<p>Это стартовая страница нового сайта, созданного через SiteForge.</p>
-<?php
-require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
-PHP;
-        file_put_contents($indexPhp, $indexContent);
-
-        // LID (2 символа)
-        $LID = strtoupper(substr(md5($folderName.microtime(true)), 0, 2));
-        if (\CSite::GetByID($LID)->Fetch()) {
-            $LID = strtoupper(substr(md5($folderName.microtime(true).random_int(1, 9999)), 0, 2));
-        }
-
-        // Наследуем культуру и SERVER_NAME у дефолтного сайта
-        $defaultSite = \CSite::GetList($by = 'sort', $order = 'asc', ['DEF' => 'Y'])->Fetch();
-
-        $serverName = (string)\COption::GetOptionString('main', 'server_name', '');
-        if ($serverName === '') {
-            $serverName = (string)Context::getCurrent()->getServer()->getHttpHost();
-        }
-
-        $cultureId = 0;
-        if (!empty($defaultSite['CULTURE_ID'])) {
-            $cultureId = (int)$defaultSite['CULTURE_ID'];
-        }
-        $formatDate     = $defaultSite['FORMAT_DATE']     ?? 'DD.MM.YYYY';
-        $formatDateTime = $defaultSite['FORMAT_DATETIME'] ?? 'DD.MM.YYYY HH:MI:SS';
-        $charset        = $defaultSite['CHARSET']         ?? 'UTF-8';
-
-        $fields = [
-            'LID'         => $LID,
-            'SORT'        => 100,
-            'ACTIVE'      => 'Y',
-            'DEF'         => 'N',
-            'NAME'        => $siteName,
-            'DIR'         => $siteFolderRel,
-            'DOMAIN'      => '',
-            'LANGUAGE_ID' => 'ru',
-            'SITE_NAME'   => $siteName,
-            'SERVER_NAME' => $serverName,
-        ];
-
-        if ($cultureId > 0) {
-            $fields['CULTURE_ID'] = $cultureId;
-        } else {
-            $fields['FORMAT_DATE']     = $formatDate;
-            $fields['FORMAT_DATETIME'] = $formatDateTime;
-            $fields['CHARSET']         = $charset;
-        }
-
-        $cs = new \CSite;
-        $ok = $cs->Add($fields);
-
-        if (!$ok) {
-            Directory::deleteDirectory($siteFolderAbs);
-            global $APPLICATION;
-            $ex  = $APPLICATION->GetException();
-            $msg = $ex ? $ex->GetString() : 'Unknown error';
-            throw new SystemException('CSite::Add failed: ' . $msg);
-        }
-
-        return [
-            'SITE_LID'   => $LID,
-            'FOLDER_ABS' => $siteFolderAbs,
-            'FOLDER_REL' => $siteFolderRel,
-        ];
-    }
-
-    /**
-     * Группы и участники.
-     * @param array{SITE_CODE:string,ADMINS:array,USERS:array} $params
-     * @return array{ADMIN_GROUP_ID:int,USER_GROUP_ID:int}
-     */
-    public function createGroupsAndAssignUsers(array $params): array
-    {
-        Loader::includeModule('main');
-
-        $siteCode = (string)($params['SITE_CODE'] ?? '');
-        $admins   = array_unique(array_map('intval', (array)($params['ADMINS'] ?? [])));
-        $users    = array_unique(array_map('intval', (array)($params['USERS'] ?? [])));
-
-        if ($siteCode === '') {
-            throw new ArgumentException('SITE_CODE required');
-        }
-
-        $adminGroupName = "[{$siteCode}] Site Admins";
-        $userGroupName  = "[{$siteCode}] Site Users";
-
-        $adminGroupId = $this->getOrCreateGroup($adminGroupName, 'Администраторы сайта '.$siteCode);
-        $userGroupId  = $this->getOrCreateGroup($userGroupName,  'Пользователи сайта '.$siteCode);
-
-        $this->assignUsersToGroup($adminGroupId, $admins);
-        $this->assignUsersToGroup($userGroupId,  $users);
-
-        return [
-            'ADMIN_GROUP_ID' => $adminGroupId,
-            'USER_GROUP_ID'  => $userGroupId,
-        ];
-    }
-
-    /**
-     * Права на директорию: Admins=W, Users=R, * = D.
-     */
-    public function applyFsPermissions(array $params): void
-    {
-        $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
-        $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
-        $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
-
-        if ($folderAbs === '' || !is_dir($folderAbs)) {
-            throw new ArgumentException('FOLDER_ABS invalid');
-        }
-        if ($adminGid <= 0 || $userGid <= 0) {
-            throw new ArgumentException('Group IDs required');
-        }
-
-        $docRoot   = Application::getDocumentRoot();
-        $folderRel = str_replace($docRoot, '', $folderAbs);
-        if ($folderRel === $folderAbs) {
-            throw new SystemException('Cannot compute relative path');
-        }
-
-        $perm = [
-            'G'.$adminGid => 'W',
-            'G'.$userGid  => 'R',
-            '*'           => 'D',
-        ];
-        \CMain::SetFileAccessPermission($folderRel, $perm);
-    }
-
-    /**
-     * Список активных сайтов нашего проекта (DIR начинается с /local/siteforge/).
-     * @return array<int,array{LID:string,NAME:string,DIR:string}>
-     */
-    public function listSites(): array
-    {
-        $out = [];
-        $res = \CSite::GetList($by='NAME', $order='asc', ['ACTIVE' => 'Y']);
-        while ($s = $res->Fetch()) {
-            $dir = (string)($s['DIR'] ?? '');
-            if ($this->startsWith($dir, $this->rootRel . '/')) {
-                $out[] = [
-                    'LID'  => (string)$s['LID'],
-                    'NAME' => (string)$s['NAME'],
-                    'DIR'  => $dir,
-                ];
-            }
-        }
-        return $out;
-    }
-
-    /**
-     * true, если пользователь состоит в одной из групп сайта.
-     */
-    public function userHasAccessToSite(string $lid, int $userId): bool
-    {
-        if ($userId <= 0) { return false; }
-        $ids = $this->resolveSiteGroupIdsByLid($lid);
-        $userGroups = \CUser::GetUserGroup($userId);
-        if (!is_array($userGroups)) { $userGroups = []; }
-        $userGroups = array_map('intval', $userGroups);
-
-        foreach (['ADMIN_GROUP_ID','USER_GROUP_ID'] as $k) {
-            if (!empty($ids[$k]) && in_array((int)$ids[$k], $userGroups, true)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** ===== Helpers ===== */
-
-    protected function getOrCreateGroup(string $name, string $description): int
-    {
-        $stringId = $this->slugifyStringId($name);
-
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-
-        $gr = new \CGroup;
-        $id = $gr->Add([
-            'ACTIVE'      => 'Y',
-            'C_SORT'      => 100,
-            'NAME'        => $name,
-            'DESCRIPTION' => $description,
-            'STRING_ID'   => $stringId,
-        ]);
-        if (!$id) {
-            global $APPLICATION;
-            $ex = $APPLICATION->GetException();
-            $msg = $ex ? $ex->GetString() : 'Unknown error';
-            throw new SystemException('Group create failed: ' . $msg);
-        }
-        return (int)$id;
-    }
-
-    protected function assignUsersToGroup(int $groupId, array $userIds): void
-    {
-        if ($groupId <= 0 || empty($userIds)) { return; }
-
-        $existing = [];
-        $rs = \CUser::GetList($by='ID', $order='asc', ['GROUPS_ID' => [$groupId]], ['FIELDS'=>['ID']]);
-        while ($u = $rs->Fetch()) {
-            $existing[(int)$u['ID']] = true;
-        }
-
-        foreach ($userIds as $uid) {
-            $uid = (int)$uid;
-            if ($uid <= 0 || isset($existing[$uid])) { continue; }
-            \CUser::AppendUserGroup($uid, $groupId);
-        }
-    }
-
-    protected function resolveSiteGroupIdsByLid(string $lid): array
-    {
-        $adminName = "[{$lid}] Site Admins";
-        $userName  = "[{$lid}] Site Users";
-        return [
-            'ADMIN_GROUP_ID' => $this->findGroupIdByNameOrStringId($adminName),
-            'USER_GROUP_ID'  => $this->findGroupIdByNameOrStringId($userName),
-        ];
-    }
-
-    protected function findGroupIdByNameOrStringId(string $name): ?int
-    {
-        $stringId = $this->slugifyStringId($name);
-
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-        return null;
-    }
-
-    protected function slugifyStringId(string $name): string
-    {
-        $id = mb_strtolower($name);
-        $id = preg_replace('~[^a-z0-9\_]+~', '_', $id);
-        $id = trim($id, '_');
-        if ($id === '') { $id = 'site_group_'.substr(md5($name), 0, 6); }
-        return substr($id, 0, 50);
-    }
-
-    protected function startsWith(string $haystack, string $needle): bool
-    {
-        return $needle === '' || strncmp($haystack, $needle, strlen($needle)) === 0;
+if ($cache->InitCache($cacheTtl, $cacheId, $cacheDir)) {
+    $vars = $cache->GetVars();
+    $sites = $vars['SITES'] ?? [];
+} else {
+    $sites = $factory->listSites();
+    if ($cache->StartDataCache()) {
+        $cache->EndDataCache(['SITES' => $sites]);
     }
 }
+
+?>
+<style>
+.sf-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:16px 0;}
+.sf-card {border:1px solid #e1e6eb;border-radius:10px;padding:14px;background:#fff;}
+.sf-title {font-weight:600;margin-bottom:8px;}
+.sf-muted {opacity:0.55;}
+.sf-badge {display:inline-block;border:1px solid #dde3ea;border-radius:8px;padding:2px 8px;font-size:12px;margin-left:8px;}
+</style>
+
+<div class="sf-grid">
+<?php
+if (empty($sites)) {
+    echo '<div class="sf-card">Пока нет созданных сайтов.</div>';
+} else {
+    foreach ($sites as $s) {
+        $lid = $s['LID'];
+        $name = $s['NAME'];
+        $dir = $s['DIR']; // например: /local/siteforge/myfolder/
+
+        $hasAccess = $factory->userHasAccessToSite($lid, (int)$USER->GetID());
+
+        $titleHtml = htmlspecialcharsbx($name.' ('.$lid.')');
+        $urlHtml   = htmlspecialcharsbx($dir);
+
+        echo '<div class="sf-card'.($hasAccess ? '' : ' sf-muted').'">';
+        echo    '<div class="sf-title">'.$titleHtml;
+        echo        $hasAccess ? '<span class="sf-badge">Доступ есть</span>' : '<span class="sf-badge">Нет доступа</span>';
+        echo    '</div>';
+        echo    '<div>';
+        if ($hasAccess) {
+            echo '<a href="'.$urlHtml.'">Перейти на сайт</a>';
+        } else {
+            echo '<span title="У вас нет доступа">Перейти на сайт</span>';
+        }
+        echo    '</div>';
+        echo '</div>';
+    }
+}
+?>
+</div>
