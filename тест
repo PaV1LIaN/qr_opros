@@ -142,3 +142,217 @@ PHP;
 
         if ($cultureId > 0) {
             $fields['CULTURE_ID'] = $cultureId;
+        } else {
+            $fields['FORMAT_DATE']     = $formatDate;
+            $fields['FORMAT_DATETIME'] = $formatDateTime;
+            $fields['CHARSET']         = $charset;
+        }
+
+        $cs = new \CSite;
+        $ok = $cs->Add($fields);
+
+        if (!$ok) {
+            Directory::deleteDirectory($siteFolderAbs);
+            global $APPLICATION;
+            $ex  = $APPLICATION->GetException();
+            $msg = $ex ? $ex->GetString() : 'Unknown error';
+            throw new SystemException('CSite::Add failed: ' . $msg);
+        }
+
+        return [
+            'SITE_LID'   => $LID,
+            'FOLDER_ABS' => $siteFolderAbs,
+            'FOLDER_REL' => $siteFolderRel,
+        ];
+    }
+
+    /**
+     * Группы и участники.
+     * @param array{SITE_CODE:string,ADMINS:array,USERS:array} $params
+     * @return array{ADMIN_GROUP_ID:int,USER_GROUP_ID:int}
+     */
+    public function createGroupsAndAssignUsers(array $params): array
+    {
+        Loader::includeModule('main');
+
+        $siteCode = (string)($params['SITE_CODE'] ?? '');
+        $admins   = array_unique(array_map('intval', (array)($params['ADMINS'] ?? [])));
+        $users    = array_unique(array_map('intval', (array)($params['USERS'] ?? [])));
+
+        if ($siteCode === '') {
+            throw new ArgumentException('SITE_CODE required');
+        }
+
+        $adminGroupName = "[{$siteCode}] Site Admins";
+        $userGroupName  = "[{$siteCode}] Site Users";
+
+        $adminGroupId = $this->getOrCreateGroup($adminGroupName, 'Администраторы сайта '.$siteCode);
+        $userGroupId  = $this->getOrCreateGroup($userGroupName,  'Пользователи сайта '.$siteCode);
+
+        $this->assignUsersToGroup($adminGroupId, $admins);
+        $this->assignUsersToGroup($userGroupId,  $users);
+
+        return [
+            'ADMIN_GROUP_ID' => $adminGroupId,
+            'USER_GROUP_ID'  => $userGroupId,
+        ];
+    }
+
+    /**
+     * Права на директорию: Admins=W, Users=R, * = D.
+     */
+    public function applyFsPermissions(array $params): void
+    {
+        $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
+        $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
+        $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
+
+        if ($folderAbs === '' || !is_dir($folderAbs)) {
+            throw new ArgumentException('FOLDER_ABS invalid');
+        }
+        if ($adminGid <= 0 || $userGid <= 0) {
+            throw new ArgumentException('Group IDs required');
+        }
+
+        $docRoot   = Application::getDocumentRoot();
+        $folderRel = str_replace($docRoot, '', $folderAbs);
+        if ($folderRel === $folderAbs) {
+            throw new SystemException('Cannot compute relative path');
+        }
+
+        $perm = [
+            'G'.$adminGid => 'W',
+            'G'.$userGid  => 'R',
+            '*'           => 'D',
+        ];
+        \CMain::SetFileAccessPermission($folderRel, $perm);
+    }
+
+    /**
+     * Список активных сайтов нашего проекта (DIR начинается с /local/siteforge/).
+     * @return array<int,array{LID:string,NAME:string,DIR:string}>
+     */
+    public function listSites(): array
+    {
+        $out = [];
+        $res = \CSite::GetList($by='NAME', $order='asc', ['ACTIVE' => 'Y']);
+        while ($s = $res->Fetch()) {
+            $dir = (string)($s['DIR'] ?? '');
+            if ($this->startsWith($dir, $this->rootRel . '/')) {
+                $out[] = [
+                    'LID'  => (string)$s['LID'],
+                    'NAME' => (string)$s['NAME'],
+                    'DIR'  => $dir,
+                ];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * true, если пользователь состоит в одной из групп сайта.
+     */
+    public function userHasAccessToSite(string $lid, int $userId): bool
+    {
+        if ($userId <= 0) { return false; }
+        $ids = $this->resolveSiteGroupIdsByLid($lid);
+        $userGroups = \CUser::GetUserGroup($userId);
+        if (!is_array($userGroups)) { $userGroups = []; }
+        $userGroups = array_map('intval', $userGroups);
+
+        foreach (['ADMIN_GROUP_ID','USER_GROUP_ID'] as $k) {
+            if (!empty($ids[$k]) && in_array((int)$ids[$k], $userGroups, true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** ===== Helpers ===== */
+
+    protected function getOrCreateGroup(string $name, string $description): int
+    {
+        $stringId = $this->slugifyStringId($name);
+
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
+
+        $gr = new \CGroup;
+        $id = $gr->Add([
+            'ACTIVE'      => 'Y',
+            'C_SORT'      => 100,
+            'NAME'        => $name,
+            'DESCRIPTION' => $description,
+            'STRING_ID'   => $stringId,
+        ]);
+        if (!$id) {
+            global $APPLICATION;
+            $ex = $APPLICATION->GetException();
+            $msg = $ex ? $ex->GetString() : 'Unknown error';
+            throw new SystemException('Group create failed: ' . $msg);
+        }
+        return (int)$id;
+    }
+
+    protected function assignUsersToGroup(int $groupId, array $userIds): void
+    {
+        if ($groupId <= 0 || empty($userIds)) { return; }
+
+        $existing = [];
+        $rs = \CUser::GetList($by='ID', $order='asc', ['GROUPS_ID' => [$groupId]], ['FIELDS'=>['ID']]);
+        while ($u = $rs->Fetch()) {
+            $existing[(int)$u['ID']] = true;
+        }
+
+        foreach ($userIds as $uid) {
+            $uid = (int)$uid;
+            if ($uid <= 0 || isset($existing[$uid])) { continue; }
+            \CUser::AppendUserGroup($uid, $groupId);
+        }
+    }
+
+    protected function resolveSiteGroupIdsByLid(string $lid): array
+    {
+        $adminName = "[{$lid}] Site Admins";
+        $userName  = "[{$lid}] Site Users";
+        return [
+            'ADMIN_GROUP_ID' => $this->findGroupIdByNameOrStringId($adminName),
+            'USER_GROUP_ID'  => $this->findGroupIdByNameOrStringId($userName),
+        ];
+    }
+
+    protected function findGroupIdByNameOrStringId(string $name): ?int
+    {
+        $stringId = $this->slugifyStringId($name);
+
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
+        if ($g && (int)$g['ID'] > 0) {
+            return (int)$g['ID'];
+        }
+        return null;
+    }
+
+    protected function slugifyStringId(string $name): string
+    {
+        $id = mb_strtolower($name);
+        $id = preg_replace('~[^a-z0-9\_]+~', '_', $id);
+        $id = trim($id, '_');
+        if ($id === '') { $id = 'site_group_'.substr(md5($name), 0, 6); }
+        return substr($id, 0, 50);
+    }
+
+    protected function startsWith(string $haystack, string $needle): bool
+    {
+        return $needle === '' || strncmp($haystack, $needle, strlen($needle)) === 0;
+    }
+}
