@@ -1,81 +1,93 @@
-    /**
-     * Вернёт активные сайты, созданные SiteForge (DIR начинается с /local/siteforge/).
-     * Каждый элемент: ['LID','NAME','DIR']
-     */
-    public function listSites(): array
-    {
-        $out = [];
-        $res = \CSite::GetList($by='NAME', $order='asc', [
-            'ACTIVE' => 'Y',
-        ]);
-        while ($s = $res->Fetch()) {
-            // фильтруем только наши
-            if (!empty($s['DIR']) && str_starts_with($s['DIR'], $this->rootRel . '/')) {
-                $out[] = [
-                    'LID'  => $s['LID'],
-                    'NAME' => $s['NAME'],
-                    'DIR'  => $s['DIR'],
-                ];
-            }
-        }
-        return $out;
+<?php
+/**
+ * Выводит список всех подсайтов, созданных SiteForge.
+ * Видят все авторизованные пользователи. У кого нет доступа — плитка "неактивна".
+ */
+
+use Bitrix\Main\Loader;
+
+if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+
+if (!Loader::includeModule('main')) {
+    return;
+}
+
+// Подключаем класс логики без автозагрузки модуля: это "сайт", не модуль
+require_once $_SERVER['DOCUMENT_ROOT'].'/local/siteforge/lib/SiteFactory.php';
+
+global $USER;
+$isAuth = is_object($USER) && $USER->IsAuthorized();
+if (!$isAuth) {
+    // Можно вообще не показывать гостям — по ТЗ речь о пользователях Битрикс24.
+    echo '<div style="margin:16px 0" class="ui-alert ui-alert-warning">Пожалуйста, авторизуйтесь, чтобы видеть доступные сайты.</div>';
+    return;
+}
+
+$factory = new \Local\Siteforge\SiteFactory();
+
+// Кешируем на короткое время список сайтов, чтобы не дёргать БД на каждый хит
+$cacheTtl = 60; // секунд
+$cacheId  = 'siteforge_list_v1';
+$cacheDir = '/siteforge_list';
+
+$cache = new CPHPCache();
+$sites = [];
+
+if ($cache->InitCache($cacheTtl, $cacheId, $cacheDir)) {
+    $vars = $cache->GetVars();
+    $sites = $vars['SITES'] ?? [];
+} else {
+    $sites = $factory->listSites();
+    if ($cache->StartDataCache()) {
+        $cache->EndDataCache(['SITES' => $sites]);
     }
+}
 
-    /**
-     * По коду сайта (LID) возвращает IDs групп Admins/Users.
-     * Возвращает: ['ADMIN_GROUP_ID'=>int|null, 'USER_GROUP_ID'=>int|null]
-     */
-    public function resolveSiteGroupIdsByLid(string $lid): array
-    {
-        $adminName = "[{$lid}] Site Admins";
-        $userName  = "[{$lid}] Site Users";
+// Рендер плиток
+if (empty($sites)) {
+    echo '<div style="margin:16px 0" class="ui-alert ui-alert-primary">Пока нет созданных сайтов.</div>';
+    return;
+}
 
-        $adminId = $this->findGroupIdByNameOrStringId($adminName);
-        $userId  = $this->findGroupIdByNameOrStringId($userName);
+// Небольшие стили прямо тут, чтобы не править шаблоны
+?>
+<style>
+.siteforge-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:16px 0;}
+.siteforge-card {border:1px solid #e1e6eb;border-radius:10px;padding:14px;}
+.siteforge-title {font-weight:600;margin-bottom:8px;}
+.siteforge-link a {text-decoration:none;}
+.siteforge-muted {opacity:0.55;}
+.siteforge-badge {display:inline-block;border:1px solid #dde3ea;border-radius:8px;padding:2px 8px;font-size:12px;margin-left:8px;}
+</style>
 
-        return [
-            'ADMIN_GROUP_ID' => $adminId,
-            'USER_GROUP_ID'  => $userId,
-        ];
+<div class="siteforge-grid">
+<?php
+foreach ($sites as $s) {
+    $lid = $s['LID'];
+    $name = $s['NAME'];
+    $dir = $s['DIR']; // например: /local/siteforge/myfolder/
+
+    $hasAccess = $factory->userHasAccessToSite($lid, (int)$USER->GetID());
+
+    // Безопасная ссылка (если доступа нет — ссылку не рендерим как <a>)
+    $titleHtml = htmlspecialcharsbx($name.' ('.$lid.')');
+    $urlHtml   = htmlspecialcharsbx($dir);
+
+    echo '<div class="siteforge-card'.($hasAccess ? '' : ' siteforge-muted').'">';
+
+    echo '<div class="siteforge-title">'.$titleHtml;
+    echo $hasAccess ? '<span class="siteforge-badge">Доступ есть</span>' : '<span class="siteforge-badge">Нет доступа</span>';
+    echo '</div>';
+
+    echo '<div class="siteforge-link">';
+    if ($hasAccess) {
+        echo '<a href="'.$urlHtml.'">Перейти на сайт</a>';
+    } else {
+        echo '<span title="У вас нет доступа">Перейти на сайт</span>';
     }
+    echo '</div>';
 
-    /**
-     * Проверяет, состоит ли пользователь хотя бы в одной группе сайта.
-     * true => можно заходить (и файловые права пропустят).
-     */
-    public function userHasAccessToSite(string $lid, int $userId): bool
-    {
-        if ($userId <= 0) { return false; }
-        $ids = $this->resolveSiteGroupIdsByLid($lid);
-        $userGroups = \CUser::GetUserGroup($userId);
-        if (!is_array($userGroups)) { $userGroups = []; }
-        $userGroups = array_map('intval', $userGroups);
-
-        foreach (['ADMIN_GROUP_ID','USER_GROUP_ID'] as $k) {
-            if (!empty($ids[$k]) && in_array((int)$ids[$k], $userGroups, true)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** ===== internal helpers ===== */
-
-    protected function findGroupIdByNameOrStringId(string $name): ?int
-    {
-        $stringId = $this->slugifyStringId($name);
-
-        // 1) Ищем по STRING_ID
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-
-        // 2) Ищем по NAME (на случай, если STRING_ID в базе иной)
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
-        if ($g && (int)$g['ID'] > 0) {
-            return (int)$g['ID'];
-        }
-
-        return null;
-    }
+    echo '</div>';
+}
+?>
+</div>
