@@ -1,1 +1,54 @@
-Ошибка: CSite::Add failed: Не указаны региональные настройки.&lt;br&gt;
+use Bitrix\Main\Context;
+
+// ...
+// 4) ---- ДОБАВЬТЕ ЭТО: тянем культуру и SERVER_NAME c дефолтного сайта ----
+$defaultSite = \CSite::GetList($by = 'sort', $order = 'asc', ['DEF' => 'Y'])->Fetch();
+
+$serverName = '';
+// 1) сначала из настроек ядра
+$optServerName = \COption::GetOptionString('main', 'server_name', '');
+if ($optServerName !== '') {
+    $serverName = $optServerName;
+} else {
+    // 2) если опция не задана — берём текущий хост
+    $serverName = (string)Context::getCurrent()->getServer()->getHttpHost();
+}
+
+// Для новых версий (с b_culture) — достаточно CULTURE_ID
+$cultureId = 0;
+if (!empty($defaultSite['CULTURE_ID'])) {
+    $cultureId = (int)$defaultSite['CULTURE_ID'];
+}
+
+// Фолбэк для старых инсталляций (если вдруг CULTURE_ID нет):
+$formatDate     = $defaultSite['FORMAT_DATE']     ?? 'DD.MM.YYYY';
+$formatDateTime = $defaultSite['FORMAT_DATETIME'] ?? 'DD.MM.YYYY HH:MI:SS';
+$charset        = $defaultSite['CHARSET']         ?? 'UTF-8';
+// --------------------------------------------------------------------------
+
+// 5) Регистрируем сайт
+$cs = new \CSite;
+$fields = [
+    'LID'         => $LID,
+    'SORT'        => 100,
+    'ACTIVE'      => 'Y',
+    'DEF'         => 'N',
+    'NAME'        => $siteName,
+    'DIR'         => $siteFolderRel, // с / на конце
+    'DOMAIN'      => '',             // при необходимости — задайте ваш домен
+    'LANGUAGE_ID' => 'ru',
+    'SITE_NAME'   => $siteName,
+    'SERVER_NAME' => $serverName,    // <<< ВАЖНО: иначе может ругаться на настройки
+];
+
+// Если есть культура — передадим её (для новых версий это must have)
+if ($cultureId > 0) {
+    $fields['CULTURE_ID'] = $cultureId;
+} else {
+    // Иначе — передаём явные региональные поля (старый режим)
+    $fields['FORMAT_DATE']     = $formatDate;
+    $fields['FORMAT_DATETIME'] = $formatDateTime;
+    $fields['CHARSET']         = $charset;
+}
+
+$ok = $cs->Add($fields);
