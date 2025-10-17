@@ -1,92 +1,231 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php");
+/**
+ * Класс SiteFactory — инкапсулирует всё: создание папки, регистрация сайта,
+ * создание групп и назначение прав на файловую директорию.
+ * Пишем подробно и "по D7" где возможно.
+ */
+namespace Local\Siteforge;
 
-global $USER, $APPLICATION;
-
-if (!$USER->IsAdmin()) {
-    die('Access denied');
-}
-
+use Bitrix\Main\Application;
+use Bitrix\Main\IO\Directory;
 use Bitrix\Main\Loader;
+use Bitrix\Main\ArgumentException;
+use Bitrix\Main\SystemException;
 
-Loader::includeModule('iblock');
+class SiteFactory
+{
+    /** Корень, где живут создаваемые сайты данного проекта */
+    protected string $rootRel = '/local/siteforge';
+    protected string $rootAbs;
 
-function ensureIblockType($id, $name = 'Порталы') {
-    $res = CIBlockType::GetByID($id);
-    if ($res->Fetch()) { return true; }
-    $arFields = [
-        'ID' => $id,
-        'SECTIONS' => 'N',
-        'IN_RSS' => 'N',
-        'SORT' => 500,
-        'LANG' => [
-            'ru' => ['NAME' => $name],
-            'en' => ['NAME' => 'Portals'],
-        ],
-    ];
-    $ibt = new CIBlockType;
-    return (bool)$ibt->Add($arFields);
+    public function __construct()
+    {
+        $this->rootAbs = Application::getDocumentRoot() . $this->rootRel;
+    }
+
+    /**
+     * Создать файловую папку и зарегистрировать сайт в b_site.
+     * @param array $params ['SITE_NAME'=>string, 'FOLDER_NAME'=>string]
+     * @return array ['SITE_LID','FOLDER_ABS','FOLDER_REL']
+     */
+    public function createSite(array $params): array
+    {
+        Loader::includeModule('main');
+
+        $siteName   = trim((string)($params['SITE_NAME'] ?? ''));
+        $folderName = trim((string)($params['FOLDER_NAME'] ?? ''));
+
+        if ($siteName === '') {
+            throw new ArgumentException('SITE_NAME required');
+        }
+        if ($folderName === '' || !preg_match('~^[a-z0-9\-\_]+$~i', $folderName)) {
+            throw new ArgumentException('FOLDER_NAME invalid (allowed: a-z, 0-9, -, _)');
+        }
+
+        // Абсолютный/относительный путь создаваемого сайта
+        $siteFolderAbs = $this->rootAbs . '/' . $folderName;
+        $siteFolderRel = $this->rootRel . '/' . $folderName . '/'; // ВАЖЕН закрывающий слэш
+
+        // Создаём корневую директорию проекта, если её нет
+        if (!Directory::isDirectoryExists($this->rootAbs)) {
+            Directory::createDirectory($this->rootAbs);
+        }
+
+        // Создаём папку сайта (падаем, если уже есть)
+        if (Directory::isDirectoryExists($siteFolderAbs)) {
+            throw new SystemException('Folder already exists: ' . $siteFolderAbs);
+        }
+        Directory::createDirectory($siteFolderAbs);
+
+        // Простейший index.php для созданного сайта
+        $indexPhp = $siteFolderAbs . '/index.php';
+        $indexContent = <<<'PHP'
+<?php
+require $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
+$APPLICATION->SetTitle('Новый сайт');
+?>
+<h1>Добро пожаловать!</h1>
+<p>Это стартовая страница нового сайта.</p>
+<?php
+require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
+PHP;
+        file_put_contents($indexPhp, $indexContent);
+
+        // Генерируем LID (2 символа для максимальной совместимости)
+        $LID = strtoupper(substr(md5($folderName.microtime(true)), 0, 2));
+        if (\CSite::GetByID($LID)->Fetch()) {
+            $LID = strtoupper(substr(md5($folderName.microtime(true).random_int(1, 9999)), 0, 2));
+        }
+
+        // Регистрируем сайт
+        $cs = new \CSite;
+        $ok = $cs->Add([
+            'LID'         => $LID,
+            'SORT'        => 100,
+            'ACTIVE'      => 'Y',
+            'DEF'         => 'N',
+            'NAME'        => $siteName,
+            'DIR'         => $siteFolderRel, // с / на конце
+            'DOMAIN'      => '',             // при необходимости можно задать
+            'LANGUAGE_ID' => 'ru',
+            'SITE_NAME'   => $siteName,
+        ]);
+
+        if (!$ok) {
+            // Откат: удаляем папку, если сайт не создался
+            Directory::deleteDirectory($siteFolderAbs);
+            global $APPLICATION;
+            $ex  = $APPLICATION->GetException();
+            $msg = $ex ? $ex->GetString() : 'Unknown error';
+            throw new SystemException('CSite::Add failed: ' . $msg);
+        }
+
+        return [
+            'SITE_LID'   => $LID,
+            'FOLDER_ABS' => $siteFolderAbs,
+            'FOLDER_REL' => $siteFolderRel,
+        ];
+    }
+
+    /**
+     * Создать 2 группы (Admins/Users) и назначить участников.
+     * @param array $params ['SITE_CODE'=>string,'ADMINS'=>int[],'USERS'=>int[]]
+     * @return array ['ADMIN_GROUP_ID','USER_GROUP_ID']
+     */
+    public function createGroupsAndAssignUsers(array $params): array
+    {
+        Loader::includeModule('main');
+
+        $siteCode = (string)($params['SITE_CODE'] ?? '');
+        $admins   = array_unique(array_map('intval', (array)($params['ADMINS'] ?? [])));
+        $users    = array_unique(array_map('intval', (array)($params['USERS'] ?? [])));
+
+        if ($siteCode === '') {
+            throw new ArgumentException('SITE_CODE required');
+        }
+
+        $adminGroupName = "[{$siteCode}] Site Admins";
+        $userGroupName  = "[{$siteCode}] Site Users";
+
+        $adminGroupId = $this->getOrCreateGroup($adminGroupName, 'Администраторы сайта '.$siteCode);
+        $userGroupId  = $this->getOrCreateGroup($userGroupName,  'Пользователи сайта '.$siteCode);
+
+        $this->assignUsersToGroup($adminGroupId, $admins);
+        $this->assignUsersToGroup($userGroupId,  $users);
+
+        return [
+            'ADMIN_GROUP_ID' => $adminGroupId,
+            'USER_GROUP_ID'  => $userGroupId,
+        ];
+    }
+
+    /**
+     * Права на файловую директорию сайта:
+     *   G<admins> => W, G<users> => R, * => D
+     */
+    public function applyFsPermissions(array $params): void
+    {
+        $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
+        $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
+        $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
+
+        if ($folderAbs === '' || !is_dir($folderAbs)) {
+            throw new ArgumentException('FOLDER_ABS invalid');
+        }
+        if ($adminGid <= 0 || $userGid <= 0) {
+            throw new ArgumentException('Group IDs required');
+        }
+
+        $docRoot  = Application::getDocumentRoot();
+        $folderRel = str_replace($docRoot, '', $folderAbs);
+        if ($folderRel === $folderAbs) {
+            throw new SystemException('Cannot compute relative path');
+        }
+
+        $perm = [
+            'G'.$adminGid => 'W',
+            'G'.$userGid  => 'R',
+            '*'           => 'D',
+        ];
+        \CMain::SetFileAccessPermission($folderRel, $perm);
+    }
+
+    /** ===== Helpers ===== */
+
+    protected function getOrCreateGroup(string $name, string $description): int
+    {
+        // Пытаемся найти по STRING_ID (из имени делаем slug)
+        $stringId = $this->slugifyStringId($name);
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
+        if ($g) {
+            return (int)$g['ID'];
+        }
+        // Или по NAME, если вдруг STRING_ID другой
+        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
+        if ($g) {
+            return (int)$g['ID'];
+        }
+
+        $gr = new \CGroup;
+        $id = $gr->Add([
+            'ACTIVE'      => 'Y',
+            'C_SORT'      => 100,
+            'NAME'        => $name,
+            'DESCRIPTION' => $description,
+            'STRING_ID'   => $stringId,
+        ]);
+        if (!$id) {
+            global $APPLICATION;
+            $ex = $APPLICATION->GetException();
+            $msg = $ex ? $ex->GetString() : 'Unknown error';
+            throw new SystemException('Group create failed: ' . $msg);
+        }
+        return (int)$id;
+    }
+
+    protected function assignUsersToGroup(int $groupId, array $userIds): void
+    {
+        if ($groupId <= 0 || empty($userIds)) { return; }
+
+        // Узнаём текущих участников, чтобы не дублировать
+        $existing = [];
+        $rs = \CUser::GetList($by='ID', $order='asc', ['GROUPS_ID' => [$groupId]], ['FIELDS'=>['ID']]);
+        while ($u = $rs->Fetch()) {
+            $existing[(int)$u['ID']] = true;
+        }
+        foreach ($userIds as $uid) {
+            $uid = (int)$uid;
+            if ($uid <= 0 || isset($existing[$uid])) { continue; }
+            \CUser::AppendUserGroup($uid, $groupId);
+        }
+    }
+
+    protected function slugifyStringId(string $name): string
+    {
+        $id = mb_strtolower($name);
+        $id = preg_replace('~[^a-z0-9\_]+~', '_', $id);
+        $id = trim($id, '_');
+        if ($id === '') { $id = 'site_group_'.substr(md5($name), 0, 6); }
+        return substr($id, 0, 50);
+    }
 }
-
-function ensureIblock($type, $code, $name, $siteIds) {
-    $res = CIBlock::GetList([], ['TYPE' => $type, '=CODE' => $code], false);
-    if ($ib = $res->Fetch()) { return (int)$ib['ID']; }
-    $ib = new CIBlock;
-    $id = $ib->Add([
-        'ACTIVE' => 'Y',
-        'NAME'   => $name,
-        'CODE'   => $code,
-        'IBLOCK_TYPE_ID' => $type,
-        'SITE_ID' => $siteIds,
-        'GROUP_ID' => ['2' => 'R', '1' => 'X'], // все авторизованные - чтение, админы - полный
-    ]);
-    return (int)$id;
-}
-
-function ensureProperty($iblockId, $code, $name) {
-    $res = CIBlockProperty::GetList([], ['IBLOCK_ID' => $iblockId, '=CODE' => $code]);
-    if ($prop = $res->Fetch()) { return (int)$prop['ID']; }
-    $ibp = new CIBlockProperty;
-    $id = $ibp->Add([
-        'NAME' => $name,
-        'ACTIVE' => 'Y',
-        'SORT' => 100,
-        'CODE' => $code,
-        'PROPERTY_TYPE' => 'N', // Число (ID группы)
-        'IBLOCK_ID' => $iblockId,
-        'IS_REQUIRED' => 'N',
-        'MULTIPLE' => 'N'
-    ]);
-    return (int)$id;
-}
-
-$run = isset($_REQUEST['run']) && $_REQUEST['run'] === '1';
-
-if (!$run) {
-    ?>
-    <form method="post">
-        <?= bitrix_sessid_post() ?>
-        <input type="hidden" name="run" value="1">
-        <button class="ui-btn ui-btn-success">Установить инфоблоки для Portal Hub</button>
-    </form>
-    <?php
-    die();
-}
-
-if (!check_bitrix_sessid()) { die('Bad sessid'); }
-
-// Получаем ID сайтов (привяжем ко всем)
-$siteIds = [];
-$rsSites = CSite::GetList($by="sort", $order="asc", []);
-while ($s = $rsSites->Fetch()) { $siteIds[] = $s['ID']; }
-if (empty($siteIds)) { $siteIds = ['s1']; }
-
-$ok = ensureIblockType('portal', 'Порталы');
-$ibId = ensureIblock('portal', 'portal_sites', 'Портальные сайты', $siteIds);
-$propId = $ibId > 0 ? ensureProperty($ibId, 'SITE_ROLE', 'ID группы роли') : 0;
-
-echo '<pre>';
-echo "Тип ИБ: " . ($ok ? "OK" : "FAIL") . PHP_EOL;
-echo "Инфоблок portal_sites: " . ($ibId > 0 ? "ID=$ibId" : "FAIL") . PHP_EOL;
-echo "Свойство SITE_ROLE: " . ($propId > 0 ? "ID=$propId" : "FAIL") . PHP_EOL;
-echo '</pre>';
