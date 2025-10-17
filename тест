@@ -1,231 +1,168 @@
 <?php
 /**
- * Класс SiteFactory — инкапсулирует всё: создание папки, регистрация сайта,
- * создание групп и назначение прав на файловую директорию.
- * Пишем подробно и "по D7" где возможно.
+ * Публичная страница-”сайт” для администраторов.
+ * Здесь форма + обработчик. По сабмиту дергаем Local\Siteforge\SiteFactory.
+ *
+ * Почему публичная? Вы просили реализовать как сайт (а не модуль).
+ * Доступ ограничиваем .access.php и дополнительной проверкой в рантайме.
  */
-namespace Local\Siteforge;
 
-use Bitrix\Main\Application;
-use Bitrix\Main\IO\Directory;
 use Bitrix\Main\Loader;
-use Bitrix\Main\ArgumentException;
-use Bitrix\Main\SystemException;
+use Bitrix\Main\Context;
+use Local\Siteforge\SiteFactory;
 
-class SiteFactory
-{
-    /** Корень, где живут создаваемые сайты данного проекта */
-    protected string $rootRel = '/local/siteforge';
-    protected string $rootAbs;
-
-    public function __construct()
-    {
-        $this->rootAbs = Application::getDocumentRoot() . $this->rootRel;
-    }
-
-    /**
-     * Создать файловую папку и зарегистрировать сайт в b_site.
-     * @param array $params ['SITE_NAME'=>string, 'FOLDER_NAME'=>string]
-     * @return array ['SITE_LID','FOLDER_ABS','FOLDER_REL']
-     */
-    public function createSite(array $params): array
-    {
-        Loader::includeModule('main');
-
-        $siteName   = trim((string)($params['SITE_NAME'] ?? ''));
-        $folderName = trim((string)($params['FOLDER_NAME'] ?? ''));
-
-        if ($siteName === '') {
-            throw new ArgumentException('SITE_NAME required');
-        }
-        if ($folderName === '' || !preg_match('~^[a-z0-9\-\_]+$~i', $folderName)) {
-            throw new ArgumentException('FOLDER_NAME invalid (allowed: a-z, 0-9, -, _)');
-        }
-
-        // Абсолютный/относительный путь создаваемого сайта
-        $siteFolderAbs = $this->rootAbs . '/' . $folderName;
-        $siteFolderRel = $this->rootRel . '/' . $folderName . '/'; // ВАЖЕН закрывающий слэш
-
-        // Создаём корневую директорию проекта, если её нет
-        if (!Directory::isDirectoryExists($this->rootAbs)) {
-            Directory::createDirectory($this->rootAbs);
-        }
-
-        // Создаём папку сайта (падаем, если уже есть)
-        if (Directory::isDirectoryExists($siteFolderAbs)) {
-            throw new SystemException('Folder already exists: ' . $siteFolderAbs);
-        }
-        Directory::createDirectory($siteFolderAbs);
-
-        // Простейший index.php для созданного сайта
-        $indexPhp = $siteFolderAbs . '/index.php';
-        $indexContent = <<<'PHP'
-<?php
 require $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
-$APPLICATION->SetTitle('Новый сайт');
-?>
-<h1>Добро пожаловать!</h1>
-<p>Это стартовая страница нового сайта.</p>
-<?php
-require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
-PHP;
-        file_put_contents($indexPhp, $indexContent);
+$APPLICATION->SetTitle('SiteForge — создание подсайтов');
 
-        // Генерируем LID (2 символа для максимальной совместимости)
-        $LID = strtoupper(substr(md5($folderName.microtime(true)), 0, 2));
-        if (\CSite::GetByID($LID)->Fetch()) {
-            $LID = strtoupper(substr(md5($folderName.microtime(true).random_int(1, 9999)), 0, 2));
-        }
+if (!Loader::includeModule('main')) {
+    ShowError('Модуль main недоступен.');
+    require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
+    die();
+}
 
-        // Регистрируем сайт
-        $cs = new \CSite;
-        $ok = $cs->Add([
-            'LID'         => $LID,
-            'SORT'        => 100,
-            'ACTIVE'      => 'Y',
-            'DEF'         => 'N',
-            'NAME'        => $siteName,
-            'DIR'         => $siteFolderRel, // с / на конце
-            'DOMAIN'      => '',             // при необходимости можно задать
-            'LANGUAGE_ID' => 'ru',
-            'SITE_NAME'   => $siteName,
-        ]);
+// Дополнительная защита: пропускаем только администраторов портала (ID=1 или флаг isAdmin)
+global $USER;
+if (!$USER->IsAuthorized() || !$USER->IsAdmin()) {
+    $APPLICATION->AuthForm('Доступ запрещён.');
+}
 
-        if (!$ok) {
-            // Откат: удаляем папку, если сайт не создался
-            Directory::deleteDirectory($siteFolderAbs);
-            global $APPLICATION;
-            $ex  = $APPLICATION->GetException();
-            $msg = $ex ? $ex->GetString() : 'Unknown error';
-            throw new SystemException('CSite::Add failed: ' . $msg);
-        }
+require_once __DIR__.'/lib/SiteFactory.php';
 
-        return [
-            'SITE_LID'   => $LID,
-            'FOLDER_ABS' => $siteFolderAbs,
-            'FOLDER_REL' => $siteFolderRel,
-        ];
+$request = Context::getCurrent()->getRequest();
+$errors  = [];
+$success = null;
+
+if ($request->isPost() && check_bitrix_sessid()) {
+    $siteName   = trim((string)$request->getPost('SITE_NAME'));
+    $folderName = trim((string)$request->getPost('FOLDER_NAME'));
+    $admins     = (array)$request->getPost('ADMINS');
+    $users      = (array)$request->getPost('USERS');
+
+    // Валидация полей
+    if ($siteName === '') {
+        $errors[] = 'Заполните "Название сайта".';
+    }
+    if ($folderName === '' || !preg_match('~^[a-z0-9\-\_]+$~i', $folderName)) {
+        $errors[] = 'Неверное "Название папки": допустимы латиница/цифры/-/_.';
+    }
+    // Не позволяем одному пользователю быть и там и там
+    $intersect = array_intersect((array)$admins, (array)$users);
+    if (!empty($intersect)) {
+        $errors[] = 'Пользователь не может одновременно быть админом и пользователем этого сайта.';
     }
 
-    /**
-     * Создать 2 группы (Admins/Users) и назначить участников.
-     * @param array $params ['SITE_CODE'=>string,'ADMINS'=>int[],'USERS'=>int[]]
-     * @return array ['ADMIN_GROUP_ID','USER_GROUP_ID']
-     */
-    public function createGroupsAndAssignUsers(array $params): array
-    {
-        Loader::includeModule('main');
+    if (empty($errors)) {
+        try {
+            $factory = new SiteFactory();
 
-        $siteCode = (string)($params['SITE_CODE'] ?? '');
-        $admins   = array_unique(array_map('intval', (array)($params['ADMINS'] ?? [])));
-        $users    = array_unique(array_map('intval', (array)($params['USERS'] ?? [])));
+            // Шаг 1: создаём сайт (папка + запись в b_site)
+            $creation = $factory->createSite([
+                'SITE_NAME'   => $siteName,
+                'FOLDER_NAME' => $folderName,
+            ]);
 
-        if ($siteCode === '') {
-            throw new ArgumentException('SITE_CODE required');
+            // Шаг 2: группы и назначение людей
+            $groupInfo = $factory->createGroupsAndAssignUsers([
+                'SITE_CODE' => $creation['SITE_LID'],
+                'ADMINS'    => $admins,
+                'USERS'     => $users,
+            ]);
+
+            // Шаг 3: права на файловую директорию
+            $factory->applyFsPermissions([
+                'FOLDER_ABS'     => $creation['FOLDER_ABS'],
+                'ADMIN_GROUP_ID' => $groupInfo['ADMIN_GROUP_ID'],
+                'USER_GROUP_ID'  => $groupInfo['USER_GROUP_ID'],
+            ]);
+
+            $success = sprintf(
+                'Сайт "%s" создан. Код (LID): %s. Папка: %s',
+                htmlspecialcharsbx($siteName),
+                htmlspecialcharsbx($creation['SITE_LID']),
+                htmlspecialcharsbx($creation['FOLDER_ABS'])
+            );
+
+        } catch (\Throwable $e) {
+            $errors[] = 'Ошибка: ' . htmlspecialcharsbx($e->getMessage());
         }
-
-        $adminGroupName = "[{$siteCode}] Site Admins";
-        $userGroupName  = "[{$siteCode}] Site Users";
-
-        $adminGroupId = $this->getOrCreateGroup($adminGroupName, 'Администраторы сайта '.$siteCode);
-        $userGroupId  = $this->getOrCreateGroup($userGroupName,  'Пользователи сайта '.$siteCode);
-
-        $this->assignUsersToGroup($adminGroupId, $admins);
-        $this->assignUsersToGroup($userGroupId,  $users);
-
-        return [
-            'ADMIN_GROUP_ID' => $adminGroupId,
-            'USER_GROUP_ID'  => $userGroupId,
-        ];
-    }
-
-    /**
-     * Права на файловую директорию сайта:
-     *   G<admins> => W, G<users> => R, * => D
-     */
-    public function applyFsPermissions(array $params): void
-    {
-        $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
-        $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
-        $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
-
-        if ($folderAbs === '' || !is_dir($folderAbs)) {
-            throw new ArgumentException('FOLDER_ABS invalid');
-        }
-        if ($adminGid <= 0 || $userGid <= 0) {
-            throw new ArgumentException('Group IDs required');
-        }
-
-        $docRoot  = Application::getDocumentRoot();
-        $folderRel = str_replace($docRoot, '', $folderAbs);
-        if ($folderRel === $folderAbs) {
-            throw new SystemException('Cannot compute relative path');
-        }
-
-        $perm = [
-            'G'.$adminGid => 'W',
-            'G'.$userGid  => 'R',
-            '*'           => 'D',
-        ];
-        \CMain::SetFileAccessPermission($folderRel, $perm);
-    }
-
-    /** ===== Helpers ===== */
-
-    protected function getOrCreateGroup(string $name, string $description): int
-    {
-        // Пытаемся найти по STRING_ID (из имени делаем slug)
-        $stringId = $this->slugifyStringId($name);
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['STRING_ID' => $stringId])->Fetch();
-        if ($g) {
-            return (int)$g['ID'];
-        }
-        // Или по NAME, если вдруг STRING_ID другой
-        $g = \CGroup::GetList($by='c_sort', $order='asc', ['NAME' => $name])->Fetch();
-        if ($g) {
-            return (int)$g['ID'];
-        }
-
-        $gr = new \CGroup;
-        $id = $gr->Add([
-            'ACTIVE'      => 'Y',
-            'C_SORT'      => 100,
-            'NAME'        => $name,
-            'DESCRIPTION' => $description,
-            'STRING_ID'   => $stringId,
-        ]);
-        if (!$id) {
-            global $APPLICATION;
-            $ex = $APPLICATION->GetException();
-            $msg = $ex ? $ex->GetString() : 'Unknown error';
-            throw new SystemException('Group create failed: ' . $msg);
-        }
-        return (int)$id;
-    }
-
-    protected function assignUsersToGroup(int $groupId, array $userIds): void
-    {
-        if ($groupId <= 0 || empty($userIds)) { return; }
-
-        // Узнаём текущих участников, чтобы не дублировать
-        $existing = [];
-        $rs = \CUser::GetList($by='ID', $order='asc', ['GROUPS_ID' => [$groupId]], ['FIELDS'=>['ID']]);
-        while ($u = $rs->Fetch()) {
-            $existing[(int)$u['ID']] = true;
-        }
-        foreach ($userIds as $uid) {
-            $uid = (int)$uid;
-            if ($uid <= 0 || isset($existing[$uid])) { continue; }
-            \CUser::AppendUserGroup($uid, $groupId);
-        }
-    }
-
-    protected function slugifyStringId(string $name): string
-    {
-        $id = mb_strtolower($name);
-        $id = preg_replace('~[^a-z0-9\_]+~', '_', $id);
-        $id = trim($id, '_');
-        if ($id === '') { $id = 'site_group_'.substr(md5($name), 0, 6); }
-        return substr($id, 0, 50);
     }
 }
+
+// Подготовим список пользователей (активные)
+$usersList = [];
+$rs = CUser::GetList($by='ID', $order='asc', ['ACTIVE'=>'Y'], ['FIELDS'=>['ID','NAME','LAST_NAME','LOGIN','EMAIL']]);
+while ($u = $rs->Fetch()) {
+    $title = trim($u['LAST_NAME'].' '.$u['NAME']);
+    if ($title === '') { $title = $u['LOGIN']; }
+    $title .= ' ['.$u['ID'].']';
+    if (!empty($u['EMAIL'])) { $title .= ' <'.$u['EMAIL'].'>'; }
+    $usersList[] = ['ID'=>$u['ID'], 'TITLE'=>$title];
+}
+
+// Вывод сообщений
+if (!empty($errors)) {
+    echo '<div class="ui-alert ui-alert-danger" style="margin:15px 0">';
+    foreach ($errors as $err) {
+        echo '<div>'.htmlspecialcharsbx($err).'</div>';
+    }
+    echo '</div>';
+}
+if ($success) {
+    echo '<div class="ui-alert ui-alert-success" style="margin:15px 0">'. $success .'</div>';
+}
+?>
+
+<!-- Простая форма (без внешних зависимостей).
+     В бою можно заменить мультиселекты на bitrix:ui.selector -->
+<form method="post" action="">
+    <?=bitrix_sessid_post()?>
+
+    <div style="max-width:820px;padding:16px;border:1px solid #e1e6eb;border-radius:8px">
+        <h2 style="margin-top:0">Создание нового сайта</h2>
+
+        <div style="margin:12px 0">
+            <label><b>Название сайта</b></label><br>
+            <input type="text" name="SITE_NAME" value="<?=htmlspecialcharsbx($request->getPost('SITE_NAME'))?>" style="width:100%;max-width:520px">
+        </div>
+
+        <div style="margin:12px 0">
+            <label><b>Название папки</b> <small>/local/siteforge/<u>ваша_папка</u></small></label><br>
+            <input type="text" name="FOLDER_NAME" value="<?=htmlspecialcharsbx($request->getPost('FOLDER_NAME'))?>" style="width:100%;max-width:320px">
+        </div>
+
+        <div style="margin:18px 0;padding-top:6px;border-top:1px dashed #ddd">
+            <h3 style="margin:8px 0">Пользователи</h3>
+
+            <div style="display:flex;gap:24px;flex-wrap:wrap">
+                <div>
+                    <div>Администраторы сайта (множественный выбор):</div>
+                    <select name="ADMINS[]" multiple size="10" style="min-width:360px">
+                        <?php foreach ($usersList as $u): ?>
+                            <option value="<?=$u['ID']?>" <?=(in_array($u['ID'], (array)$request->getPost('ADMINS') ?? [], true) ? 'selected' : '')?>>
+                                <?=htmlspecialcharsbx($u['TITLE'])?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div>
+                    <div>Пользователи сайта (множественный выбор):</div>
+                    <select name="USERS[]" multiple size="10" style="min-width:360px">
+                        <?php foreach ($usersList as $u): ?>
+                            <option value="<?=$u['ID']?>" <?=(in_array($u['ID'], (array)$request->getPost('USERS') ?? [], true) ? 'selected' : '')?>>
+                                <?=htmlspecialcharsbx($u['TITLE'])?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top:16px">
+            <button type="submit" class="ui-btn ui-btn-primary">Создать сайт</button>
+        </div>
+    </div>
+</form>
+
+<?php
+require $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php';
