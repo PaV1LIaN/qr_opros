@@ -1,12 +1,43 @@
-// Flash-сообщения (после редиректа из PRG)
-if (!isset($_SESSION)) { session_start(); }
-if (!empty($_SESSION['SITEFORGE_SUCCESS'])) {
-    CAdminMessage::ShowMessage(['MESSAGE' => $_SESSION['SITEFORGE_SUCCESS'], 'TYPE' => 'OK']);
-    unset($_SESSION['SITEFORGE_SUCCESS']);
-}
-if (!empty($_SESSION['SITEFORGE_ERRORS']) && is_array($_SESSION['SITEFORGE_ERRORS'])) {
-    foreach ($_SESSION['SITEFORGE_ERRORS'] as $err) {
-        CAdminMessage::ShowMessage(['MESSAGE' => $err, 'TYPE' => 'ERROR', 'HTML' => true]);
+if ($USER->IsAdmin() && $request->isPost() && check_bitrix_sessid()) {
+    ...
+    if (empty($errors)) {
+        try {
+            // 1) создать сайт
+            $creation = $factory->createSite([
+                'SITE_NAME'   => $siteName,
+                'FOLDER_NAME' => $folderName,
+            ]);
+            // 2) группы
+            $groupInfo = $factory->createGroupsAndAssignUsers([
+                'SITE_CODE' => $creation['SITE_LID'],
+                'ADMINS'    => $admins,
+                'USERS'     => $users,
+            ]);
+            // 3) права
+            $factory->applyFsPermissions([
+                'FOLDER_ABS'     => $creation['FOLDER_ABS'],
+                'ADMIN_GROUP_ID' => $groupInfo['ADMIN_GROUP_ID'],
+                'USER_GROUP_ID'  => $groupInfo['USER_GROUP_ID'],
+            ]);
+
+            // Flash + PRG
+            if (!isset($_SESSION)) { session_start(); }
+            $_SESSION['SITEFORGE_SUCCESS'] = sprintf(
+                'Сайт "%s" создан. Код (LID): %s. Папка: %s',
+                htmlspecialcharsbx($siteName),
+                htmlspecialcharsbx($creation['SITE_LID']),
+                htmlspecialcharsbx($creation['FOLDER_ABS'])
+            );
+            LocalRedirect($APPLICATION->GetCurPageParam('', ['sessid'])); // GET-запрос на ту же страницу
+        } catch (\Throwable $e) {
+            $errors[] = 'Ошибка: ' . htmlspecialcharsbx($e->getMessage());
+        }
     }
-    unset($_SESSION['SITEFORGE_ERRORS']);
+
+    // Если были ошибки — тоже через PRG (чтобы F5 не повторял POST)
+    if (!empty($errors)) {
+        if (!isset($_SESSION)) { session_start(); }
+        $_SESSION['SITEFORGE_ERRORS'] = $errors;
+        LocalRedirect($APPLICATION->GetCurPageParam('', ['sessid']));
+    }
 }
