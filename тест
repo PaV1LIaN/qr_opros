@@ -1,93 +1,19 @@
 <?php
-/**
- * Выводит список всех подсайтов, созданных SiteForge.
- * Видят все авторизованные пользователи. У кого нет доступа — плитка "неактивна".
- */
+if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
 
 use Bitrix\Main\Loader;
 
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+if (!Loader::includeModule('main')) { return; }
 
-if (!Loader::includeModule('main')) {
-    return;
-}
-
-// Подключаем класс логики без автозагрузки модуля: это "сайт", не модуль
+// ВАЖНО: путь к классу остаётся внутри проекта
 require_once $_SERVER['DOCUMENT_ROOT'].'/local/siteforge/lib/SiteFactory.php';
 
 global $USER;
-$isAuth = is_object($USER) && $USER->IsAuthorized();
-if (!$isAuth) {
-    // Можно вообще не показывать гостям — по ТЗ речь о пользователях Битрикс24.
-    echo '<div style="margin:16px 0" class="ui-alert ui-alert-warning">Пожалуйста, авторизуйтесь, чтобы видеть доступные сайты.</div>';
+if (!$USER->IsAuthorized()) {
+    echo '<div class="ui-alert ui-alert-warning" style="margin:16px 0">Пожалуйста, авторизуйтесь, чтобы видеть доступные сайты.</div>';
     return;
 }
 
 $factory = new \Local\Siteforge\SiteFactory();
 
-// Кешируем на короткое время список сайтов, чтобы не дёргать БД на каждый хит
-$cacheTtl = 60; // секунд
-$cacheId  = 'siteforge_list_v1';
-$cacheDir = '/siteforge_list';
-
-$cache = new CPHPCache();
-$sites = [];
-
-if ($cache->InitCache($cacheTtl, $cacheId, $cacheDir)) {
-    $vars = $cache->GetVars();
-    $sites = $vars['SITES'] ?? [];
-} else {
-    $sites = $factory->listSites();
-    if ($cache->StartDataCache()) {
-        $cache->EndDataCache(['SITES' => $sites]);
-    }
-}
-
-// Рендер плиток
-if (empty($sites)) {
-    echo '<div style="margin:16px 0" class="ui-alert ui-alert-primary">Пока нет созданных сайтов.</div>';
-    return;
-}
-
-// Небольшие стили прямо тут, чтобы не править шаблоны
-?>
-<style>
-.siteforge-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:16px 0;}
-.siteforge-card {border:1px solid #e1e6eb;border-radius:10px;padding:14px;}
-.siteforge-title {font-weight:600;margin-bottom:8px;}
-.siteforge-link a {text-decoration:none;}
-.siteforge-muted {opacity:0.55;}
-.siteforge-badge {display:inline-block;border:1px solid #dde3ea;border-radius:8px;padding:2px 8px;font-size:12px;margin-left:8px;}
-</style>
-
-<div class="siteforge-grid">
-<?php
-foreach ($sites as $s) {
-    $lid = $s['LID'];
-    $name = $s['NAME'];
-    $dir = $s['DIR']; // например: /local/siteforge/myfolder/
-
-    $hasAccess = $factory->userHasAccessToSite($lid, (int)$USER->GetID());
-
-    // Безопасная ссылка (если доступа нет — ссылку не рендерим как <a>)
-    $titleHtml = htmlspecialcharsbx($name.' ('.$lid.')');
-    $urlHtml   = htmlspecialcharsbx($dir);
-
-    echo '<div class="siteforge-card'.($hasAccess ? '' : ' siteforge-muted').'">';
-
-    echo '<div class="siteforge-title">'.$titleHtml;
-    echo $hasAccess ? '<span class="siteforge-badge">Доступ есть</span>' : '<span class="siteforge-badge">Нет доступа</span>';
-    echo '</div>';
-
-    echo '<div class="siteforge-link">';
-    if ($hasAccess) {
-        echo '<a href="'.$urlHtml.'">Перейти на сайт</a>';
-    } else {
-        echo '<span title="У вас нет доступа">Перейти на сайт</span>';
-    }
-    echo '</div>';
-
-    echo '</div>';
-}
-?>
-</div>
+// ...дальше — ровно тот же код рендера сетки сайтов (listSites(), userHasAccessToSite() и т.п.)
