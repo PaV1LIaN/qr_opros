@@ -1,1 +1,33 @@
-Ошибка: Non-static method CAllMain::SetFileAccessPermission() cannot be called statically
+public function applyFsPermissions(array $params): void
+{
+    $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
+    $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
+    $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
+
+    if ($folderAbs === '' || !is_dir($folderAbs)) {
+        throw new \Bitrix\Main\ArgumentException('FOLDER_ABS invalid');
+    }
+    if ($adminGid <= 0 || $userGid <= 0) {
+        throw new \Bitrix\Main\ArgumentException('Group IDs required');
+    }
+
+    $docRoot   = \Bitrix\Main\Application::getDocumentRoot();
+    $folderRel = str_replace($docRoot, '', $folderAbs);
+    if ($folderRel === $folderAbs) {
+        throw new \Bitrix\Main\SystemException('Cannot compute relative path');
+    }
+
+    // Права на каталог: G<admins>=W, G<users>=R, * = D
+    $perm = [
+        'G'.$adminGid => 'W',
+        'G'.$userGid  => 'R',
+        '*'           => 'D',
+    ];
+
+    // ВАЖНО: вызываем через $APPLICATION, а не статически
+    global $APPLICATION;
+    $APPLICATION->SetFileAccessPermission($folderRel, $perm);
+
+    // (Опционально) на главную страницу сайта тоже можно проставить права:
+    // $APPLICATION->SetFileAccessPermission($folderRel.'index.php', $perm);
+}
