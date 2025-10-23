@@ -1,33 +1,6 @@
-public function applyFsPermissions(array $params): void
-{
-    $folderAbs = (string)($params['FOLDER_ABS'] ?? '');
-    $adminGid  = (int)($params['ADMIN_GROUP_ID'] ?? 0);
-    $userGid   = (int)($params['USER_GROUP_ID'] ?? 0);
+Это программа, для нахождения методом половинного деления корней уравнения f(x)=0 на отрезке [a, b] с заданной точностью (eps). К сожалению, программа работает неправильно. Известно, что
 
-    if ($folderAbs === '' || !is_dir($folderAbs)) {
-        throw new \Bitrix\Main\ArgumentException('FOLDER_ABS invalid');
-    }
-    if ($adminGid <= 0 || $userGid <= 0) {
-        throw new \Bitrix\Main\ArgumentException('Group IDs required');
-    }
+f(x)=x2-2, a=0, b=2, eps=0,0001.
 
-    $docRoot   = \Bitrix\Main\Application::getDocumentRoot();
-    $folderRel = str_replace($docRoot, '', $folderAbs);
-    if ($folderRel === $folderAbs) {
-        throw new \Bitrix\Main\SystemException('Cannot compute relative path');
-    }
+Исправьте программу. Оцените количество произведенных операций.
 
-    // Права на каталог: G<admins>=W, G<users>=R, * = D
-    $perm = [
-        'G'.$adminGid => 'W',
-        'G'.$userGid  => 'R',
-        '*'           => 'D',
-    ];
-
-    // ВАЖНО: вызываем через $APPLICATION, а не статически
-    global $APPLICATION;
-    $APPLICATION->SetFileAccessPermission($folderRel, $perm);
-
-    // (Опционально) на главную страницу сайта тоже можно проставить права:
-    // $APPLICATION->SetFileAccessPermission($folderRel.'index.php', $perm);
-}
