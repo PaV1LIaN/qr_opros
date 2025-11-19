@@ -1,137 +1,128 @@
+<?php
+
+$dsn = 'mysql:host=localhost;dbname=qr_opros';
+
+$username = 'root';
+$password = 'root';
+
+$pdo = new PDO($dsn, $username, $password);
+
+$cars = $pdo->query("SELECT * FROM cars")->fetchAll(PDO::FETCH_ASSOC);
+
+// Обработка формы
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
+
+    $car_id = (int)$_POST['car_id'];
+    $data = [
+        'move_time' => (int)$_POST['move_time'],
+        'clean' => (int)$_POST['clean'],
+        'driver_clean' => (int)$_POST['driver_clean'],
+        'driver_tactic' => (int)$_POST['driver_tactic'],
+        'move_safety' => (int)$_POST['move_safety'],
+        'move_comfort' => (int)$_POST['move_comfort'],
+        'smell_cabin' => (int)$_POST['smell_cabin'],
+        'volume_music' => (int)$_POST['volume_music'],
+        'temperature_cabin' => (int)$_POST['temperature_cabin'],
+    ];
+    $comment = trim($_POST['comment']);
+    $date = date("Y-m-d");
+    $telephone = $_POST['telephone'];
+
+        $stmt = $pdo->prepare("
+            INSERT INTO cars_feedback 
+            (id_car, move_time, clean, driver_clean, driver_tactic, move_safety, move_comfort, smell_cabin, volume_music, temperature_cabin, comment, comment_date, telephone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $car_id,
+            $data['move_time'],
+            $data['clean'],
+            $data['driver_clean'],
+            $data['driver_tactic'],
+            $data['move_safety'],
+            $data['move_comfort'],
+            $data['smell_cabin'],
+            $data['volume_music'],
+            $data['temperature_cabin'],
+            $comment,
+            $date,
+            $telephone
+        ]);
+}
+?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<link rel="stylesheet" href="/local/qr_opros/src/styles.css">
-	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
-    <title>Document</title>
+    <title>Опрос по автомобилям</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
+<body class="bg-light">
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-7 col-md-9 col-sm-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h3 class="card-title text-center mb-4">Опрос по автомобилям</h3>
 
-<?php
-//require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-include "/local/qr_opros/phpqrcode/qrlib.php";
+                    <?php if (!empty($success)): ?>
+                        <div class="alert alert-success">Спасибо за отзыв!</div>
+                    <?php endif; ?>
 
-?>
-<script src="/local/qr_opros/jquery-3.6.0.min.js"></script>
+                    <form method="post" class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label">Выберите автомобиль</label>
+                            <select name="car_id" class="form-select" required>
+                                <?php foreach ($cars as $car): ?>
+                                    <option value="<?= $car['ID_CAR'] ?>">
+                                        <?= htmlspecialchars($car['NAME_CAR']) ?> <?= htmlspecialchars($car['NOM_CAR']) ?> (<?= htmlspecialchars($car['TYPE_CAR']) ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
 
-<body>
-<div>
+                        <?php 
+                        $criteria = [
+                            "move_time" => "Время поездки",
+                            "clean" => "Чистота салона",
+                            "driver_clean" => "Опрятность водителя",
+                            "driver_tactic" => "Манера вождения",
+                            "move_safety" => "Безопасность движения",
+                            "move_comfort" => "Комфорт поездки",
+                            "smell_cabin" => "Запах в салоне",
+                            "volume_music" => "Громкость музыки",
+                            "temperature_cabin" => "Температура в салоне"
+                        ];
+                        foreach ($criteria as $name => $label): ?>
+                            <div class="col-12">
+                                <label class="form-label"><?= $label ?></label>
+                                <div class="d-flex align-items-center">
+                                    <input type="range" class="flex-grow-1 me-3" 
+                                           name="<?= $name ?>" min="1" max="5" value="3" 
+                                           oninput="document.getElementById('val_<?= $name ?>').innerText = this.value">
+                                    <span id="val_<?= $name ?>" class="fw-bold">3</span> / 5
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
 
+                        <div class="col-12">
+                            <label class="form-label">Комментарий</label>
+                            <textarea name="comment" class="form-control" rows="3" placeholder="Ваш отзыв..."></textarea>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label">Телефон (необязательно)</label>
+                            <input type="text" name="telephone" class="form-control" placeholder="+7">
+                        </div>
+
+                        <div class="col-12">
+                            <button type="submit" class="btn btn-primary w-100">Отправить отзыв</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
-<div id='content'>
-<div id="blocks-container">
-</div>
-	<button id="addBlock">Добавить автомобиль</button>
-		<div id="modal" style="display: none;">
-			<h3>Добавить автомобиль</h3>
- 			<label for="nameCar">Марка транспортного средства</label> <input type="text" id="nameCar"><br>
- 			<br>
- 			<label for="typeCar">Тип автомобиля</label> <input type="text" id="typeCar"><br>
- 			<br>
- 			<label for="nomCar">Регистрационный знак автомобиля</label> <input type="text" id="nomCar"><br>
- 			<br>
- 			<button id="saveBlock">Сохранить</button> <button id="cancel">Отмена</button>
-		</div>
-		<script>
-			$(document).ready(function() {
-				function loadBlocks() {
-					$.ajax({
-						url: 'load_blocks.php',
-						method: 'GET',
-						success: function(data) {
-							$('#blocks-container').html(data);
-						}
-					});
-				}
-
-			loadBlocks();
-
-		document.getElementById("print-btn").addEventListener("click", function() {
-		document.body.style.visibility = "hidden";
-		let printBtn = document.getElementById("printarea");
-		printBtn.style.visibility = "visible";
-		window.print();
-		document.body.style.visibility = "visible";
-	});
-
-
-
-			$('#addBlock').click(function() {
-				$('#modal').show();
-				$(this).hide();
-			});
-
-			$('#saveBlock').click(function() {
-				var nameCar =$('#nameCar').val();
-				var typeCar =$('#typeCar').val();
-				var nomCar =$('#nomCar').val();
-
-			$.ajax({
-				url: 'add_block.php',
-				method: 'POST',
-				data: { nameCar: nameCar, typeCar: typeCar, nomCar: nomCar},
-				success: function(blockData) {
-					console.log(blockData);
-					var block = JSON.parse(blockData);
-					$('#blocks-container').append(`
-						<div class="block" car-id="${block.id}"> 
-							<h3>${block.id}</h3>
-							<h4>${block.nameCar}</h4>
-							<p>${block.typeCar}</p>
-							<p>${block.nomCar}</p>
-							<a href="application/index.php?block_id=${block.id}" class="order-btn">Скачать qr</a><br />
-							<a href="application/index.php?block_id=${block.id}" class="order-btn">Тест отзыв</a><br />
-							<div class="remove-btn">Деактивировать</div>
-						</div>
-					`);
-					$('#modal').hide();
-					$('#blockTitle').val('');
-					$('#blockDescription').val('');
-					$('#addBlock').show();
-				}
-			});
-		});
-
-		$('#cancel').click(function() {
-			$('#modal').hide();
-			$('#blockTitle').val('');
-			$('#blockDescription').val('');
-			$('#addBlock').show();
-		});
-
-		$(document).on('click', '.remove-btn', function() {
-			const block = $(this).closest('.block');
-			const blockId = block.data('id');
-
-			$.ajax({
-				url: 'remove_block.php',
-				method: 'POST',
-				data: { id: blockId },
-				success: function() {
-					block.remove();
-				}
-			});
-		});
-	});
-	</script>
-
-<?php
-$blockId = isset($_GET['block_id']) ? intval($_GET['block_id']) : 0;
-		if ($blockId <= 0) {
-			return;
-		}
-
-
-/*
-$APPLICATION->IncludeComponent(
-		"qr_opros", // Папка /local/components/qr_opros
-		"",
-		[
-			"BLOCK_ID" => $blockId;
-			"FORM_ID" => "5678"
-		],
-		false
-	);
-*/
-?>
+</body>
+</html>
