@@ -1,15 +1,16 @@
-success: function(blockData) {
-    var block = JSON.parse(blockData);
-    $('#blocks-container').append(`
-        <div class="card col mb-3" data-id="${block.id}">
-            <div class="card-body">
-                <h3>${block.id}</h3>
-                <h4>${block.nameCar}</h4>
-                <p>${block.typeCar}</p>
-                <p>${block.nomCar}</p>
-                <a href="/local/qr_opros/qr_feedback/survey/?car_id=${block.id}" class="btn btn-success mb-2">Оформить</a><br />
-                <button class="edit-btn btn btn-primary btn-sm me-2">Редактировать</button>
-                <button class="remove-btn btn btn-danger btn-sm">Деактивировать</button>
-            </div>
-        </div>
-    `);
+<div id="editModal" style="display: none;">
+    <h3>Редактировать автомобиль</h3>
+    <input type="hidden" id="editId">
+
+    <label for="editNameCar">Марка транспортного средства</label>
+    <input type="text" id="editNameCar"><br><br>
+
+    <label for="editTypeCar">Тип автомобиля</label>
+    <input type="text" id="editTypeCar"><br><br>
+
+    <label for="editNomCar">Регистрационный знак автомобиля</label>
+    <input type="text" id="editNomCar"><br><br>
+
+    <button id="updateBlock">Сохранить изменения</button>
+    <button id="editCancel">Отмена</button>
+</div>
