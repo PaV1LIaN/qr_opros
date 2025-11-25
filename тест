@@ -1,16 +1,127 @@
-<div id="editModal" style="display: none;">
-    <h3>Редактировать автомобиль</h3>
-    <input type="hidden" id="editId">
+$(document).ready(function() {
 
-    <label for="editNameCar">Марка транспортного средства</label>
-    <input type="text" id="editNameCar"><br><br>
+    function loadBlocks() {
+        $.ajax({
+            url: 'load_block.php', // важно: имя файла без "s"
+            method: 'GET',
+            success: function(data) {
+                $('#blocks-container').html(data);
+            }
+        });
+    }
 
-    <label for="editTypeCar">Тип автомобиля</label>
-    <input type="text" id="editTypeCar"><br><br>
+    loadBlocks();
 
-    <label for="editNomCar">Регистрационный знак автомобиля</label>
-    <input type="text" id="editNomCar"><br><br>
+    // ----- КНОПКА ДОБАВИТЬ -----
+    $('#addBlock').click(function() {
+        $('#modal').show();
+        $(this).hide();
+    });
 
-    <button id="updateBlock">Сохранить изменения</button>
-    <button id="editCancel">Отмена</button>
-</div>
+    $('#saveBlock').click(function() {
+        var nameCar = $('#nameCar').val();
+        var typeCar = $('#typeCar').val();
+        var nomCar  = $('#nomCar').val();
+
+        $.ajax({
+            url: 'add_block.php',
+            method: 'POST',
+            data: { nameCar: nameCar, typeCar: typeCar, nomCar: nomCar },
+            success: function(blockData) {
+                var block = JSON.parse(blockData);
+                $('#blocks-container').append(`
+                    <div class="card col mb-3" data-id="${block.id}">
+                        <div class="card-body">
+                            <h3>${block.id}</h3>
+                            <h4>${block.nameCar}</h4>
+                            <p>${block.typeCar}</p>
+                            <p>${block.nomCar}</p>
+                            <a href="/local/qr_opros/qr_feedback/survey/?car_id=${block.id}" class="btn btn-success mb-2">Оформить</a><br />
+                            <button class="edit-btn btn btn-primary btn-sm me-2">Редактировать</button>
+                            <button class="remove-btn btn btn-danger btn-sm">Деактивировать</button>
+                        </div>
+                    </div>
+                `);
+                $('#modal').hide();
+                $('#nameCar').val('');
+                $('#typeCar').val('');
+                $('#nomCar').val('');
+                $('#addBlock').show();
+            }
+        });
+    });
+
+    $('#cancel').click(function() {
+        $('#modal').hide();
+        $('#nameCar').val('');
+        $('#typeCar').val('');
+        $('#nomCar').val('');
+        $('#addBlock').show();
+    });
+
+    // ----- ДЕАКТИВАЦИЯ -----
+    $(document).on('click', '.remove-btn', function() {
+        const card = $(this).closest('[data-id]');
+        const id   = card.data('id');
+
+        $.ajax({
+            url: 'remove_block.php',
+            method: 'POST',
+            data: { id: id },
+            success: function() {
+                card.remove();
+            },
+            error: function(xhr) {
+                console.error('Ошибка при деактивации:', xhr.responseText);
+            }
+        });
+    });
+
+    // ----- РЕДАКТИРОВАНИЕ (открыть модалку) -----
+    $(document).on('click', '.edit-btn', function() {
+        const card = $(this).closest('[data-id]');
+        const id   = card.data('id');
+
+        const name = card.find('h4').text().trim();
+        const type = card.find('p').eq(0).text().trim();
+        const nom  = card.find('p').eq(1).text().trim();
+
+        $('#editId').val(id);
+        $('#editNameCar').val(name);
+        $('#editTypeCar').val(type);
+        $('#editNomCar').val(nom);
+
+        $('#editModal').show();
+    });
+
+    // ----- РЕДАКТИРОВАНИЕ (сохранить изменения) -----
+    $('#updateBlock').click(function() {
+        const id      = $('#editId').val();
+        const nameCar = $('#editNameCar').val();
+        const typeCar = $('#editTypeCar').val();
+        const nomCar  = $('#editNomCar').val();
+
+        $.ajax({
+            url: 'edit_block.php',
+            method: 'POST',
+            data: { id: id, nameCar: nameCar, typeCar: typeCar, nomCar: nomCar },
+            success: function(resp) {
+                // Обновляем данные на карточке без перезагрузки
+                const card = $('[data-id="' + id + '"]');
+                card.find('h4').text(nameCar);
+                card.find('p').eq(0).text(typeCar);
+                card.find('p').eq(1).text(nomCar);
+
+                $('#editModal').hide();
+            },
+            error: function(xhr) {
+                console.error('Ошибка при обновлении:', xhr.responseText);
+            }
+        });
+    });
+
+    $('#editCancel').click(function() {
+        $('#editModal').hide();
+    });
+
+});
