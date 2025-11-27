@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>Список автомобилей</title>
+    <title>Автомобили для QR-опроса</title>
 
-    <!-- Твои общие стили -->
+    <!-- Твои стили -->
     <link rel="stylesheet" href="/local/qr_opros/src/styles.css">
 
     <!-- Bootstrap -->
@@ -25,7 +25,7 @@
                 <h1 class="h4 mb-1 text-light">Автомобили для QR-опроса</h1>
                 <div class="d-flex align-items-center gap-2">
                     <span class="badge-soft">Активные автомобили</span>
-                    <small class="text-muted">Редактируйте или деактивируйте карточки при необходимости</small>
+                    <small class="text-muted">Добавляйте, редактируйте или деактивируйте карточки</small>
                 </div>
             </div>
 
@@ -104,7 +104,7 @@ $(document).ready(function() {
     // ==== ЗАГРУЗКА КАРТОЧЕК ====
     function loadBlocks() {
         $.ajax({
-            url: 'load_blocks.php', // имя файла с карточками
+            url: 'load_blocks.php', // важно, чтобы имя файла совпадало
             method: 'GET',
             success: function(data) {
                 $('#blocks-container').html(data);
