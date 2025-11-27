@@ -1,19 +1,58 @@
-jquery-3.6.0.min.js:2 
- POST https://portal24.itsnn.ru/local/qr_opros/edit_block.php 500 (Internal Server Error)
-send	@	jquery-3.6.0.min.js:2
-ajax	@	jquery-3.6.0.min.js:2
-(anonymous)	@	qr_opros/:152
-dispatch	@	jquery-3.6.0.min.js:2
-v.handle	@	jquery-3.6.0.min.js:2
-qr_opros/:166 Ошибка при обновлении: 
-error	@	qr_opros/:166
-c	@	jquery-3.6.0.min.js:2
-fireWith	@	jquery-3.6.0.min.js:2
-l	@	jquery-3.6.0.min.js:2
-(anonymous)	@	jquery-3.6.0.min.js:2
-XMLHttpRequest.send		
-send	@	jquery-3.6.0.min.js:2
-ajax	@	jquery-3.6.0.min.js:2
-(anonymous)	@	qr_opros/:152
-dispatch	@	jquery-3.6.0.min.js:2
-v.handle	@	jquery-3.6.0.min.js:2
+<?php
+// ВРЕМЕННО: включаем вывод ошибок, чтобы увидеть причину 500
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+header('Content-Type: application/json; charset=utf-8');
+
+try {
+    $pdo = new PDO(
+        "pgsql:host=192.168.7.101;port=5432;dbname=bx",
+        "bx_user",
+        "25##PostPassBX",
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false
+        ]
+    );
+
+    // Получаем данные из POST
+    $id      = isset($_POST['id'])      ? (int)$_POST['id'] : 0;
+    $nameCar = isset($_POST['nameCar']) ? trim($_POST['nameCar']) : '';
+    $typeCar = isset($_POST['typeCar']) ? trim($_POST['typeCar']) : '';
+    $nomCar  = isset($_POST['nomCar'])  ? trim($_POST['nomCar'])  : '';
+
+    if ($id <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Wrong id']);
+        exit;
+    }
+
+    $sql = "
+        UPDATE qr_schema.cars
+        SET name_car = :name,
+            type_car = :type,
+            nom_car  = :nom
+        WHERE id_car = :id
+        -- при желании можно вернуть фильтр
+        -- AND is_activate = 1
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':name' => $nameCar,
+        ':type' => $typeCar,
+        ':nom'  => $nomCar,
+        ':id'   => $id,
+    ]);
+
+    echo json_encode(['success' => true]);
+
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'error'   => $e->getMessage()
+    ]);
+}
