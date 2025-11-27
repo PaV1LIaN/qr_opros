@@ -1,29 +1,30 @@
-<div class="mt-auto d-flex flex-wrap gap-2">
+// ===== ПЕЧАТЬ QR =====
+$(document).on('click', '.print-btn', function() {
+    const card = $(this).closest('.card');
+    const printArea = card.find('.print-area').html();
 
-    <a href="/local/qr_opros/qr_feedback/survey/?car_id='.$id.'" 
-       class="btn btn-success btn-sm">
-        Оформить
-    </a>
+    let printWindow = window.open('', '', 'width=600,height=600');
+    printWindow.document.write(`
+        <html>
+        <head>
+            <title>Печать QR</title>
+            <style>
+                body { text-align: center; font-family: Arial; }
+                img { width: 260px; height: 260px; margin-bottom: 12px; }
+                h2 { margin: 6px 0; }
+                h3 { margin: 4px 0; font-weight: normal; }
+            </style>
+        </head>
+        <body>
+            ${printArea}
+        </body>
+        </html>
+    `);
 
-    <button class="print-btn btn btn-warning btn-sm">
-        Печать
-    </button>
-
-    <button class="edit-btn btn btn-outline-light btn-sm">
-        Редактировать
-    </button>
-
-    <button class="remove-btn btn btn-outline-danger btn-sm ms-auto">
-        Деактивировать
-    </button>
-</div>
-
-<!-- 🔥 СКРЫТЫЙ БЛОК, который печатается -->
-<div class="print-area" style="display:none;">
-    <div style="text-align:center;">
-        <img src="'.$qrSrc.'" class="qr-print" style="width:260px; height:260px;">
-        <h2>'.$name.'</h2>
-        <h3>'.$type.'</h3>
-        <h3>'.$nom.'</h3>
-    </div>
-</div>
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+    }, 200);
+});
