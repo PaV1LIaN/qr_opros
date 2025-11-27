@@ -1,30 +1,24 @@
-// ===== ПЕЧАТЬ QR =====
-$(document).on('click', '.print-btn', function() {
-    const card = $(this).closest('.card');
-    const printArea = card.find('.print-area').html();
+<div class="mt-auto d-flex flex-column gap-2 btn-block-group">
 
-    let printWindow = window.open('', '', 'width=600,height=600');
-    printWindow.document.write(`
-        <html>
-        <head>
-            <title>Печать QR</title>
-            <style>
-                body { text-align: center; font-family: Arial; }
-                img { width: 260px; height: 260px; margin-bottom: 12px; }
-                h2 { margin: 6px 0; }
-                h3 { margin: 4px 0; font-weight: normal; }
-            </style>
-        </head>
-        <body>
-            ${printArea}
-        </body>
-        </html>
-    `);
+    <div class="d-flex gap-2">
+        <a href="/local/qr_opros/qr_feedback/survey/?car_id='.$id.'"
+           class="btn btn-success btn-sm flex-grow-1">
+            Оформить
+        </a>
 
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-    }, 200);
-});
+        <button class="print-btn btn btn-outline-warning btn-sm">
+            Печать
+        </button>
+    </div>
+
+    <div class="d-flex gap-2">
+        <button class="edit-btn btn btn-outline-light btn-sm">
+            Редактировать
+        </button>
+
+        <button class="remove-btn btn btn-outline-danger btn-sm ms-auto">
+            Деактивировать
+        </button>
+    </div>
+
+</div>
