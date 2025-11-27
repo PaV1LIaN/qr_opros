@@ -1,212 +1,85 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php
+include "phpqrcode/qrlib.php";
 
-    <title>Автомобили для QR-опроса</title>
+$pdo = new PDO(
+    "pgsql:host=192.168.7.101;port=5432;dbname=bx",
+    "bx_user",
+    "25##PostPassBX",
+    [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false
+    ]
+);
 
-    <!-- Твои стили -->
-    <link rel="stylesheet" href="/local/qr_opros/src/styles.css">
+// Только активные
+$blocks = $pdo->query("
+    SELECT id_car, name_car, type_car, nom_car
+    FROM qr_schema.cars
+    WHERE is_activate = 1
+    ORDER BY id_car ASC
+")->fetchAll();
 
-    <!-- Bootstrap -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+$dir = __DIR__ . "/src/images/";
+$webDir = "/local/qr_opros/src/images/";
 
-    <!-- jQuery -->
-    <script src="/local/qr_opros/jquery-3.6.0.min.js"></script>
-</head>
+if (!is_dir($dir)) {
+    mkdir($dir, 0777, true);
+}
 
-<body>
-<div class="container page-wrapper">
+foreach ($blocks as $block) {
 
-    <div class="card card-shadow">
-        <div class="card-header-main px-4 pt-3 pb-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-                <h1 class="h4 mb-1 text-light">Автомобили для QR-опроса</h1>
-                <div class="d-flex align-items-center gap-2">
-                    <span class="badge-soft">Активные автомобили</span>
-                    <small class="text-muted">Добавляйте, редактируйте или деактивируйте карточки</small>
-                </div>
-            </div>
+    $id   = (int)$block['id_car'];
+    $name = htmlspecialchars($block['name_car'], ENT_QUOTES, 'UTF-8');
+    $type = htmlspecialchars($block['type_car'], ENT_QUOTES, 'UTF-8');
+    $nom  = htmlspecialchars($block['nom_car'],  ENT_QUOTES, 'UTF-8');
 
-            <button id="addBlock" class="btn btn-success btn-add">
-                <i>＋</i> Добавить автомобиль
-            </button>
-        </div>
+    // Генерация QR (если файла нет)
+    $qrLink   = "https://portal24.itsnn.ru/local/qr_opros/qr_feedback/survey/?car_id=" . $id;
+    $filename = $dir . $id . ".png";
 
-        <div class="card-body px-4 pb-3 pt-3">
-            <div id="blocks-container" class="row g-3">
-                <!-- сюда ajax подгрузит карточки из load_blocks.php -->
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- ==== МОДАЛКА ДОБАВЛЕНИЯ ==== -->
-<div id="modal" class="modal-window">
-    <div class="modal-card">
-        <h3>Добавить автомобиль</h3>
-
-        <div class="mb-2">
-            <label for="nameCar" class="form-label">Марка транспортного средства</label>
-            <input type="text" id="nameCar" class="form-control-dark" placeholder="Например, Toyota Camry">
-        </div>
-
-        <div class="mb-2">
-            <label for="typeCar" class="form-label">Тип автомобиля</label>
-            <input type="text" id="typeCar" class="form-control-dark" placeholder="Легковой / Грузовой и т.п.">
-        </div>
-
-        <div class="mb-1">
-            <label for="nomCar" class="form-label">Регистрационный знак</label>
-            <input type="text" id="nomCar" class="form-control-dark" placeholder="А123ВС 52">
-        </div>
-
-        <div class="modal-actions">
-            <button id="cancel" class="btn btn-outline-light btn-sm">Отмена</button>
-            <button id="saveBlock" class="btn btn-primary btn-sm">Сохранить</button>
-        </div>
-    </div>
-</div>
-
-<!-- ==== МОДАЛКА РЕДАКТИРОВАНИЯ ==== -->
-<div id="editModal" class="modal-window">
-    <div class="modal-card">
-        <h3>Редактировать автомобиль</h3>
-
-        <input type="hidden" id="editId">
-
-        <div class="mb-2">
-            <label for="editNameCar" class="form-label">Марка транспортного средства</label>
-            <input type="text" id="editNameCar" class="form-control-dark">
-        </div>
-
-        <div class="mb-2">
-            <label for="editTypeCar" class="form-label">Тип автомобиля</label>
-            <input type="text" id="editTypeCar" class="form-control-dark">
-        </div>
-
-        <div class="mb-1">
-            <label for="editNomCar" class="form-label">Регистрационный знак</label>
-            <input type="text" id="editNomCar" class="form-control-dark">
-        </div>
-
-        <div class="modal-actions">
-            <button id="editCancel" class="btn btn-outline-light btn-sm">Отмена</button>
-            <button id="updateBlock" class="btn btn-primary btn-sm">Сохранить изменения</button>
-        </div>
-    </div>
-</div>
-
-<script>
-$(document).ready(function() {
-
-    // ==== ЗАГРУЗКА КАРТОЧЕК ====
-    function loadBlocks() {
-        $.ajax({
-            url: 'load_blocks.php', // важно, чтобы имя файла совпадало
-            method: 'GET',
-            success: function(data) {
-                $('#blocks-container').html(data);
-            }
-        });
+    if (!file_exists($filename)) {
+        QRcode::png($qrLink, $filename, 'H', 5, 2);
     }
 
-    loadBlocks();
+    $qrSrc = $webDir . $id . ".png";
 
+    echo '
+    <div class="col-12 col-md-6 col-lg-4">
+        <div class="card car-card h-100" data-id="'.$id.'">
+            <div class="card-body d-flex flex-column">
 
-    // ==== ОТКРЫТЬ МОДАЛКУ ДОБАВЛЕНИЯ ====
-    $('#addBlock').on('click', function() {
-        $('#modal').addClass('open');
-    });
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div class="car-info">
+                        <div class="car-id text-muted mb-1">ID '.$id.'</div>
+                        <div class="car-name">'.$name.'</div>
+                        <div class="car-type">'.$type.'</div>
+                        <div class="car-nom">'.$nom.'</div>
+                    </div>
 
-    // ==== СОХРАНИТЬ НОВУЮ ЗАПИСЬ ====
-    $('#saveBlock').on('click', function() {
-        var nameCar = $('#nameCar').val();
-        var typeCar = $('#typeCar').val();
-        var nomCar  = $('#nomCar').val();
+                    <div class="qr-wrapper">
+                        <div class="qr-preview">
+                            <img src="'.$qrSrc.'" alt="QR код" class="qr-code-right img-fluid">
+                        </div>
+                    </div>
+                </div>
 
-        $.ajax({
-            url: 'add_block.php',
-            method: 'POST',
-            data: { nameCar: nameCar, typeCar: typeCar, nomCar: nomCar },
-            success: function() {
-                loadBlocks();
-                $('#modal').removeClass('open');
+                <div class="mt-auto d-flex flex-wrap gap-2">
+                    <a href="/local/qr_opros/qr_feedback/survey/?car_id='.$id.'"
+                       class="btn btn-success btn-sm">
+                        Оформить
+                    </a>
 
-                $('#nameCar').val('');
-                $('#typeCar').val('');
-                $('#nomCar').val('');
-            }
-        });
-    });
+                    <button class="edit-btn btn btn-outline-light btn-sm">
+                        Редактировать
+                    </button>
 
-    $('#cancel').on('click', function() {
-        $('#modal').removeClass('open');
-    });
+                    <button class="remove-btn btn btn-outline-danger btn-sm ms-auto">
+                        Деактивировать
+                    </button>
+                </div>
 
-
-    // ==== ДЕАКТИВАЦИЯ ====
-    $(document).on('click', '.remove-btn', function() {
-        const card = $(this).closest('[data-id]');
-        const id   = card.data('id');
-
-        $.ajax({
-            url: 'remove_block.php',
-            method: 'POST',
-            data: { id: id },
-            success: function() {
-                loadBlocks();
-            }
-        });
-    });
-
-
-    // ==== ОТКРЫТЬ МОДАЛКУ РЕДАКТИРОВАНИЯ ====
-    $(document).on('click', '.edit-btn', function() {
-        const card = $(this).closest('[data-id]');
-        const id   = card.data('id');
-
-        const name = card.find('.car-name').text().trim();
-        const type = card.find('.car-type').text().trim();
-        const nom  = card.find('.car-nom').text().trim();
-
-        $('#editId').val(id);
-        $('#editNameCar').val(name);
-        $('#editTypeCar').val(type);
-        $('#editNomCar').val(nom);
-
-        $('#editModal').addClass('open');
-    });
-
-    $('#editCancel').on('click', function() {
-        $('#editModal').removeClass('open');
-    });
-
-
-    // ==== СОХРАНЕНИЕ ИЗМЕНЕНИЙ ====
-    $('#updateBlock').on('click', function() {
-        const id      = $('#editId').val();
-        const nameCar = $('#editNameCar').val();
-        const typeCar = $('#editTypeCar').val();
-        const nomCar  = $('#editNomCar').val();
-
-        $.ajax({
-            url: 'edit_block.php',
-            method: 'POST',
-            data: { id: id, nameCar: nameCar, typeCar: typeCar, nomCar: nomCar },
-            success: function() {
-                loadBlocks();
-                $('#editModal').removeClass('open');
-            },
-            error: function(xhr) {
-                console.error('Ошибка при обновлении:', xhr.responseText);
-            }
-        });
-    });
-
-});
-</script>
-
-</body>
-</html>
+            </div>
+        </div>
+    </div>';
+}
