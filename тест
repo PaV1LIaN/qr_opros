@@ -1,24 +1,18 @@
-<div class="mt-auto d-flex flex-column gap-2 btn-block-group">
+/* группа кнопок в карточке */
+.btn-block-group .btn {
+    min-width: 90px;
+}
 
-    <div class="d-flex gap-2">
-        <a href="/local/qr_opros/qr_feedback/survey/?car_id='.$id.'"
-           class="btn btn-success btn-sm flex-grow-1">
-            Оформить
-        </a>
+.btn-block-group .btn-success {
+    box-shadow: 0 6px 18px rgba(34, 197, 94, 0.35);
+}
 
-        <button class="print-btn btn btn-outline-warning btn-sm">
-            Печать
-        </button>
-    </div>
+.btn-block-group .btn-outline-warning {
+    border-radius: 999px;
+}
 
-    <div class="d-flex gap-2">
-        <button class="edit-btn btn btn-outline-light btn-sm">
-            Редактировать
-        </button>
-
-        <button class="remove-btn btn btn-outline-danger btn-sm ms-auto">
-            Деактивировать
-        </button>
-    </div>
-
-</div>
+/* чтобы нижние кнопки не выглядили слишком легкими */
+.btn-block-group .btn-outline-light,
+.btn-block-group .btn-outline-danger {
+    border-width: 1px;
+}
