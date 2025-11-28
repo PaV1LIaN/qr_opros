@@ -1,32 +1,54 @@
-public function createSite(array $data, int $creatorId): int
-{
-    $sitesClass = $this->sitesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-    $code = trim((string)$data['CODE']);
+use Bitrix\Main\Context;
 
-    if ($code === '') {
-        throw new \InvalidArgumentException('Пустой CODE сайта');
-    }
+// Подключаем сервис
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-    // URL, по которому сайт будет открываться БЕЗ urlrewrite
-    // /typical-sites/site.php?code=<code>
-    $folderUrl = '/typical-sites/site.php?code=' . urlencode($code);
+$APPLICATION->SetTitle("Типовой сайт");
 
-    $result = $sitesClass::add([
-        'UF_CODE'          => $code,
-        'UF_NAME'          => (string)$data['NAME'],
-        'UF_FOLDER'        => $folderUrl,
-        'UF_TEMPLATE_CODE' => $data['TEMPLATE_CODE'] ?? null,
-        'UF_ACTIVE'        => true,
-        'UF_CREATED_BY'    => $creatorId,
-        'UF_CREATED_AT'    => new DateTime(),
-    ]);
+global $USER;
 
-    if (!$result->isSuccess()) {
-        throw new \RuntimeException(
-            'Не удалось создать сайт: ' . implode(', ', $result->getErrorMessages())
-        );
-    }
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
 
-    return (int)$result->getId();
+if ($code === '') {
+    ShowError("Код сайта не указан.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site) {
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Папка с файлами конкретного сайта (которую мы создаём в компоненте sites.edit)
+$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+
+if (file_exists($folderPath . 'index.php')) {
+    include $folderPath . 'index.php';
+} else {
+    echo "Шаблон сайта не настроен.";
+}
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
