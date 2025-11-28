@@ -1,9 +1,11 @@
 <?php
-
 if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
 
-require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/components/sites.edit/class.php';
-
-class SitebuilderTypicalSitesEdit extends \Cc10\TypicalSites\Components\SitesEditComponent
-{
-}
+$arComponentDescription = [
+    "NAME" => "Создание/редактирование типового сайта",
+    "DESCRIPTION" => "Форма для создания нового типового сайта и назначения доступа",
+    "PATH" => [
+        "ID" => "sitebuilder_typical_sites",
+        "NAME" => "Sitebuilder: Типовые сайты",
+    ],
+];
