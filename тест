@@ -1,10 +1,32 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Мои типовые сайты");
-?>
+public function createSite(array $data, int $creatorId): int
+{
+    $sitesClass = $this->sitesClass;
 
-<h1>TEST PAGE /typical-sites/</h1>
-<p>Если ты это видишь — значит шаблон страницы работает.</p>
+    $code = trim((string)$data['CODE']);
 
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    if ($code === '') {
+        throw new \InvalidArgumentException('Пустой CODE сайта');
+    }
+
+    // URL, по которому сайт будет открываться БЕЗ urlrewrite
+    // /typical-sites/site.php?code=<code>
+    $folderUrl = '/typical-sites/site.php?code=' . urlencode($code);
+
+    $result = $sitesClass::add([
+        'UF_CODE'          => $code,
+        'UF_NAME'          => (string)$data['NAME'],
+        'UF_FOLDER'        => $folderUrl,
+        'UF_TEMPLATE_CODE' => $data['TEMPLATE_CODE'] ?? null,
+        'UF_ACTIVE'        => true,
+        'UF_CREATED_BY'    => $creatorId,
+        'UF_CREATED_AT'    => new DateTime(),
+    ]);
+
+    if (!$result->isSuccess()) {
+        throw new \RuntimeException(
+            'Не удалось создать сайт: ' . implode(', ', $result->getErrorMessages())
+        );
+    }
+
+    return (int)$result->getId();
+}
