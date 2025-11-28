@@ -1,3 +1,59 @@
-<h1>Типовой сайт</h1>
-<p>Это базовый шаблон типового сайта.</p>
-<p>Здесь потом можно вывести контент, инфоблоки, формы и т.д.</p>
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+// Подключаем сервис
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+use Bitrix\Main\Context;
+use Cc10\SiteService;
+
+global $USER;
+
+$request = Context::getCurrent()->getRequest();
+$uri = $request->getRequestUri();
+
+// Ожидаем URL вида /typical-sites/s/<CODE>/
+$basePath = '/typical-sites/s/';
+$path = substr($uri, strlen($basePath));
+$parts = explode('/', trim($path, '/'));
+$code  = $parts[0] ?? '';
+
+if ($code === '') {
+    ShowError("Сайт не найден.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site) {
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Папка с файлами конкретного сайта
+$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+
+if (file_exists($folderPath . 'index.php')) {
+    include $folderPath . 'index.php';
+} else {
+    echo "Шаблон сайта не настроен.";
+}
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
