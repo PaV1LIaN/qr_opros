@@ -4,7 +4,7 @@ require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 use Bitrix\Main\Context;
 
 // Подключаем сервис
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_site/lib/SiteService.php";
 
 $APPLICATION->SetTitle("Типовой сайт");
 
@@ -42,8 +42,8 @@ if (!$role) {
     exit;
 }
 
-// Папка с файлами конкретного сайта (которую мы создаём в компоненте sites.edit)
-$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+// Папка с файлами конкретного сайта
+$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_site/sites/' . $code . '/';
 
 if (file_exists($folderPath . 'index.php')) {
     include $folderPath . 'index.php';
