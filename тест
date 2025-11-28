@@ -1,14 +1,3 @@
-$folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_site/sites/' . $code . '/';
-if (!is_dir($folderPath)) {
-    mkdir($folderPath, 0755, true);
-
-    $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_site/sites/templates/default/';
-    if (is_dir($templatePath)) {
-        foreach (scandir($templatePath) as $file) {
-            if ($file === '.' || $file === '..') {
-                continue;
-            }
-            copy($templatePath . $file, $folderPath . $file);
-        }
-    }
-}
+[Error] 
+Failed opening required '/var/www/html/bx-site/local/typical_site/lib/SiteService.php' (include_path='.:/usr/lib/php') (0)
+/var/www/html/bx-site/local/typical_sites/site.php:7
