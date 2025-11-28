@@ -1,18 +1,225 @@
-/* группа кнопок в карточке */
-.btn-block-group .btn {
-    min-width: 90px;
-}
+<?php
 
-.btn-block-group .btn-success {
-    box-shadow: 0 6px 18px rgba(34, 197, 94, 0.35);
-}
+namespace Cc10;
 
-.btn-block-group .btn-outline-warning {
-    border-radius: 999px;
-}
+use Bitrix\Main\Loader;
+use Bitrix\Highloadblock\HighloadBlockTable as HL;
+use Bitrix\Main\Type\DateTime;
 
-/* чтобы нижние кнопки не выглядили слишком легкими */
-.btn-block-group .btn-outline-light,
-.btn-block-group .btn-outline-danger {
-    border-width: 1px;
+/**
+ * Сервис работы с типовыми сайтами и правами доступа.
+ * Использует HL-блоки:
+ *  - Sites          (UF_CODE, UF_NAME, UF_FOLDER, UF_ACTIVE, UF_CREATED_BY, UF_CREATED_AT, ...)
+ *  - SiteUserAccess (UF_SITE, UF_USER, UF_ROLE)
+ */
+class SiteService
+{
+    /** @var string DataManager HL Sites */
+    protected string $sitesClass;
+
+    /** @var string DataManager HL SiteUserAccess */
+    protected string $accessClass;
+
+    public function __construct()
+    {
+        if (!Loader::includeModule('highloadblock')) {
+            throw new \RuntimeException('Модуль highloadblock не установлен');
+        }
+
+        $this->sitesClass  = $this->getEntityClass('Sites');
+        $this->accessClass = $this->getEntityClass('SiteUserAccess');
+    }
+
+    /**
+     * Получить DataClass по NAME HL-блока
+     */
+    protected function getEntityClass(string $hlName): string
+    {
+        $hlblock = HL::getList([
+            'filter' => ['=NAME' => $hlName],
+            'limit'  => 1,
+        ])->fetch();
+
+        if (!$hlblock) {
+            throw new \RuntimeException("HL-блок {$hlName} не найден");
+        }
+
+        $entity    = HL::compileEntity($hlblock);
+        $dataClass = $entity->getDataClass();
+
+        return $dataClass;
+    }
+
+    /**
+     * Получить список сайтов, доступных пользователю (VIEWER / ADMIN / DEVELOPER)
+     */
+    public function getSitesForUser(int $userId): array
+    {
+        $accessClass = $this->accessClass;
+        $sitesClass  = $this->sitesClass;
+
+        // Находим ID сайтов, к которым есть доступ
+        $accessRows = $accessClass::getList([
+            'filter' => [
+                '=UF_USER' => $userId,
+                '=UF_ROLE' => ['VIEWER', 'ADMIN', 'DEVELOPER'],
+            ],
+            'select' => ['UF_SITE'],
+        ])->fetchAll();
+
+        if (empty($accessRows)) {
+            return [];
+        }
+
+        $siteIds = array_column($accessRows, 'UF_SITE');
+
+        // Забираем данные по этим сайтам
+        $result = $sitesClass::getList([
+            'filter' => [
+                '=ID'        => $siteIds,
+                '=UF_ACTIVE' => true,
+            ],
+            'select' => [
+                'ID',
+                'UF_NAME',
+                'UF_CODE',
+                'UF_FOLDER',
+                'UF_TEMPLATE_CODE',
+            ],
+            'order'  => ['UF_NAME' => 'ASC'],
+        ]);
+
+        $sites = [];
+        while ($row = $result->fetch()) {
+            $sites[] = $row;
+        }
+
+        return $sites;
+    }
+
+    /**
+     * Получить сайт по CODE
+     */
+    public function getSiteByCode(string $code): ?array
+    {
+        $sitesClass = $this->sitesClass;
+
+        $row = $sitesClass::getList([
+            'filter' => [
+                '=UF_CODE'   => $code,
+                '=UF_ACTIVE' => true,
+            ],
+            'select' => ['*'],
+            'limit'  => 1,
+        ])->fetch();
+
+        return $row ?: null;
+    }
+
+    /**
+     * Получить роль пользователя на сайте (VIEWER / ADMIN / DEVELOPER или null)
+     */
+    public function getUserRole(int $userId, int $siteId): ?string
+    {
+        $accessClass = $this->accessClass;
+
+        $row = $accessClass::getList([
+            'filter' => [
+                '=UF_USER' => $userId,
+                '=UF_SITE' => $siteId,
+            ],
+            'select' => ['UF_ROLE'],
+            'limit'  => 1,
+        ])->fetch();
+
+        return $row['UF_ROLE'] ?? null;
+    }
+
+    /**
+     * Создать сайт. Возвращает ID записи в HL Sites.
+     *
+     * Ожидает:
+     *  - $data['NAME'] — название сайта
+     *  - $data['CODE'] — код (часть URL)
+     *  - $data['TEMPLATE_CODE'] (опц.) — код шаблона
+     */
+    public function createSite(array $data, int $creatorId): int
+    {
+        $sitesClass = $this->sitesClass;
+
+        $code = trim((string)$data['CODE']);
+
+        if ($code === '') {
+            throw new \InvalidArgumentException('Пустой CODE сайта');
+        }
+
+        // URL, по которому сайт будет открываться
+        $folderUrl = '/typical-sites/s/' . $code . '/';
+
+        $result = $sitesClass::add([
+            'UF_CODE'          => $code,
+            'UF_NAME'          => (string)$data['NAME'],
+            'UF_FOLDER'        => $folderUrl,
+            'UF_TEMPLATE_CODE' => $data['TEMPLATE_CODE'] ?? null,
+            'UF_ACTIVE'        => true,
+            'UF_CREATED_BY'    => $creatorId,
+            'UF_CREATED_AT'    => new DateTime(),
+        ]);
+
+        if (!$result->isSuccess()) {
+            throw new \RuntimeException(
+                'Не удалось создать сайт: ' . implode(', ', $result->getErrorMessages())
+            );
+        }
+
+        return (int)$result->getId();
+    }
+
+    /**
+     * Задать права доступа к сайту:
+     *  - $viewers     — массив ID пользователей с ролью VIEWER
+     *  - $admins      — массив ID пользователей с ролью ADMIN
+     *  - $developers  — массив ID пользователей с ролью DEVELOPER
+     *
+     * Сначала очищает старые права, потом пишет новые.
+     */
+    public function setSiteAccess(
+        int $siteId,
+        array $viewers,
+        array $admins,
+        array $developers = []
+    ): void {
+        $accessClass = $this->accessClass;
+
+        // Удаляем старые записи по этому сайту
+        $old = $accessClass::getList([
+            'filter' => ['=UF_SITE' => $siteId],
+            'select' => ['ID'],
+        ]);
+
+        while ($row = $old->fetch()) {
+            $accessClass::delete($row['ID']);
+        }
+
+        // Внутренняя функция для добавления ролей
+        $insertRole = function (array $userIds, string $role) use ($accessClass, $siteId) {
+            $userIds = array_unique(array_filter(array_map('intval', $userIds)));
+
+            foreach ($userIds as $userId) {
+                if ($userId <= 0) {
+                    continue;
+                }
+
+                $accessClass::add([
+                    'UF_SITE' => $siteId,
+                    'UF_USER' => $userId,
+                    'UF_ROLE' => $role,
+                ]);
+            }
+        };
+
+        $insertRole($viewers, 'VIEWER');
+        $insertRole($admins, 'ADMIN');
+        $insertRole($developers, 'DEVELOPER');
+    }
 }
