@@ -1,3 +1,33 @@
-[Error] 
-Failed opening required '/var/www/html/bx-site/local/typical_site/lib/SiteService.php' (include_path='.:/usr/lib/php') (0)
-/var/www/html/bx-site/local/typical_sites/site.php:7
+2. Подготовка артефакта для развертывания.
+1.1 Если в проекте используются внешние библиотеки, подключенные через composer,
+     то удаляем из каталога vendor код всех библиотек, нужных только для разработки
+     (и которые не должны попасть на prod):
+     composer install --no-dev
+1.2 Упаковка кода в архив:
+     tar czf ../intervolga.module.tgz .
+
+3. Включение режима обслуживания. В этом режиме доступ к Б24 разрешен только с из подсетей администраторов (задаются в настройках Angie). Выполняется на всех серверах приложений.
+ssh user@appserver1 'cd /srv/bx/maintenance; mv off on; systemctl reload angie'
+ssh user@appserver2 'cd /srv/bx/maintenance; mv off on; systemctl reload angie'
+
+3. Загрузка артефакта на сервер приложений.
+Выполняется на одном (любом) сервере приложений, все изменения реплицируются с помощью Syncthing.
+scp intervolga.module.tgz user@appserver1:/srv/bx/docroot/local/modules/
+
+4. Удаление старого кода модуля, распаковка нового. Выполняется на одном сервере приложений.
+ssh user@appserver1 '\
+     cd /srv/bx/docroot/local/modules; \
+     rm -rf intervolga.module/*; \
+     tar -C intervolga.module -xzf intervolga.module.tgz; \
+     rm intervolga.module.tgz; \
+     chown -R bxweb:bxweb intervolga.module; \
+'
+
+5. Запуск миграций (если есть).
+В наших модулях используются собственные инструменты для миграций (iv-util), у вас могут быть свои скрипты.
+Выполняется на одном сервере приложений.
+ssh user@appserver1 'cd /srv/bx/docroot/local/iv-util; ./iv module --upgrade intervolga.module'
+
+6. Отключение режима обслуживания. Выполняется на всех серверах приложений.
+ssh user@appserver1 'cd /srv/bx/maintenance; mv on off; systemctl reload angie'
+ssh user@appserver2 'cd /srv/bx/maintenance; mv on off; systemctl reload angie'
