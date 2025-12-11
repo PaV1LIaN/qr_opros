@@ -1,25 +1,13 @@
-<?php
-
-namespace Cc10\TypicalSites\Components;
-
-use CBitrixComponent;
-
-require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
-
-class SitesListComponent extends CBitrixComponent
-{
-    public function executeComponent()
-    {
-        global $USER;
-
-        if (!$USER->IsAuthorized()) {
-            ShowError("Требуется авторизация.");
-            return;
-        }
-
-        $service = new \Cc10\SiteService();
-        $this->arResult['SITES'] = $service->getSitesForUser((int)$USER->GetID());
-
-        $this->includeComponentTemplate();
-    }
-}
+<?php if (empty($arResult['SITES'])): ?>
+    <p>Нет доступных сайтов.</p>
+<?php else: ?>
+    <ul>
+        <?php foreach ($arResult['SITES'] as $site): ?>
+            <li>
+                <a href="<?= htmlspecialcharsbx($site['UF_FOLDER']) ?>">
+                    <?= htmlspecialcharsbx($site['UF_NAME']) ?>
+                </a>
+            </li>
+        <?php endforeach; ?>
+    </ul>
+<?php endif; ?>
