@@ -1,79 +1,36 @@
-<?php
+<?php if (!empty($arResult['ERRORS'])): ?>
+    <div style="color:red;">
+        <?php foreach ($arResult['ERRORS'] as $error): ?>
+            <div><?= htmlspecialcharsbx($error) ?></div>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
 
-namespace Cc10\TypicalSites\Components;
+<form method="post">
+    <?= bitrix_sessid_post() ?>
 
-use CBitrixComponent;
-use Bitrix\Main\Context;
+    <div>
+        <label>Название сайта:</label><br>
+        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>">
+    </div>
 
-require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
+    <div style="margin-top:5px;">
+        <label>Код сайта (URL):</label><br>
+        <input type="text" name="CODE" value="<?= htmlspecialcharsbx($_POST['CODE'] ?? '') ?>">
+        <small>Например: training-portal</small>
+    </div>
 
-class SitesEditComponent extends CBitrixComponent
-{
-    protected function checkAccess(): bool
-    {
-        global $USER;
-        return $USER->IsAdmin(); // пока только админ
-    }
+    <div style="margin-top:5px;">
+        <label>VIEWERS (ID пользователей):</label><br>
+        <input type="text" name="VIEWERS[]" placeholder="ID пользователя">
+    </div>
 
-    public function executeComponent()
-    {
-        global $USER;
+    <div style="margin-top:5px;">
+        <label>ADMINS (ID пользователей):</label><br>
+        <input type="text" name="ADMINS[]" placeholder="ID пользователя">
+    </div>
 
-        if (!$this->checkAccess()) {
-            ShowError("Нет прав на управление сайтами.");
-            return;
-        }
-
-        $request = Context::getCurrent()->getRequest();
-        $this->arResult['ERRORS'] = [];
-
-        if ($request->isPost() && check_bitrix_sessid()) {
-            $name    = trim($request->getPost('NAME'));
-            $code    = trim($request->getPost('CODE'));
-            $viewers = (array)$request->getPost('VIEWERS');
-            $admins  = (array)$request->getPost('ADMINS');
-
-            if ($name === '') {
-                $this->arResult['ERRORS'][] = 'Не заполнено название.';
-            }
-            if (!preg_match('~^[a-z0-9\-_]+$~i', $code)) {
-                $this->arResult['ERRORS'][] = 'CODE может содержать только латиницу, цифры, - и _.';
-            }
-
-            if (empty($this->arResult['ERRORS'])) {
-                $service = new \Cc10\SiteService();
-
-                try {
-                    $siteId = $service->createSite([
-                        'NAME' => $name,
-                        'CODE' => $code,
-                    ], (int)$USER->GetID());
-
-                    $service->setSiteAccess($siteId, $viewers, $admins);
-
-                    // Папка сайта на диске
-                    $folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/' . $code . '/';
-                    if (!is_dir($folderPath)) {
-                        mkdir($folderPath, 0755, true);
-
-                        $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/templates/default/';
-                        if (is_dir($templatePath)) {
-                            foreach (scandir($templatePath) as $file) {
-                                if ($file === '.' || $file === '..') {
-                                    continue;
-                                }
-                                copy($templatePath . $file, $folderPath . $file);
-                            }
-                        }
-                    }
-
-                    LocalRedirect('/local/typical_sites/index.php');
-                } catch (\Throwable $e) {
-                    $this->arResult['ERRORS'][] = $e->getMessage();
-                }
-            }
-        }
-
-        $this->includeComponentTemplate();
-    }
-}
+    <div style="margin-top:10px;">
+        <button type="submit">Создать сайт</button>
+    </div>
+</form>
