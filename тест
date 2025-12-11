@@ -1,52 +1,103 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+    /**
+     * Все сайты (для админа)
+     */
+    public function getAllSites(): array
+    {
+        $sitesClass = $this->sitesClass;
 
-use Bitrix\Main\Context;
+        $result = $sitesClass::getList([
+            'filter' => [],
+            'select' => [
+                'ID',
+                'UF_NAME',
+                'UF_CODE',
+                'UF_FOLDER',
+                'UF_ACTIVE',
+            ],
+            'order' => ['ID' => 'DESC'],
+        ]);
 
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+        $sites = [];
+        while ($row = $result->fetch()) {
+            $sites[] = $row;
+        }
 
-$APPLICATION->SetTitle("Типовой сайт");
+        return $sites;
+    }
 
-global $USER;
+    /**
+     * Сайт по ID
+     */
+    public function getSiteById(int $id): ?array
+    {
+        $sitesClass = $this->sitesClass;
 
-$request = Context::getCurrent()->getRequest();
-$code = trim((string)$request->getQuery("code"));
+        $row = $sitesClass::getList([
+            'filter' => ['=ID' => $id],
+            'select' => ['*'],
+            'limit'  => 1,
+        ])->fetch();
 
-if ($code === '') {
-    ShowError("Код сайта не указан.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
+        return $row ?: null;
+    }
 
-if (!$USER->IsAuthorized()) {
-    ShowError("Требуется авторизация.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
+    /**
+     * Права по сайту: массив из записей HL SiteUserAccess
+     * (ID, UF_USER, UF_ROLE)
+     */
+    public function getAccessForSite(int $siteId): array
+    {
+        $accessClass = $this->accessClass;
 
-$service = new \Cc10\SiteService();
-$site = $service->getSiteByCode($code);
+        $result = $accessClass::getList([
+            'filter' => ['=UF_SITE' => $siteId],
+            'select' => ['ID', 'UF_USER', 'UF_ROLE'],
+        ]);
 
-if (!$site) {
-    ShowError("Сайт не найден или не активен.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
+        $rows = [];
+        while ($row = $result->fetch()) {
+            $rows[] = $row;
+        }
 
-$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+        return $rows;
+    }
 
-if (!$role) {
-    ShowError("У вас нет доступа к этому сайту.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
+    /**
+     * Обновить сайт по ID
+     *
+     * $data может содержать:
+     *  - NAME
+     *  - CODE
+     */
+    public function updateSite(int $id, array $data): void
+    {
+        $sitesClass = $this->sitesClass;
 
-$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+        $fields = [];
 
-if (file_exists($folderPath . 'index.php')) {
-    include $folderPath . 'index.php';
-} else {
-    echo "Шаблон сайта не настроен.";
-}
+        if (isset($data['NAME'])) {
+            $fields['UF_NAME'] = (string)$data['NAME'];
+        }
+        if (isset($data['CODE'])) {
+            $code = trim((string)$data['CODE']);
 
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+            if ($code === '') {
+                throw new \InvalidArgumentException('Пустой CODE сайта');
+            }
+
+            $fields['UF_CODE']   = $code;
+            $fields['UF_FOLDER'] = '/local/typical_sites/site.php?code=' . urlencode($code);
+        }
+
+        if (empty($fields)) {
+            return;
+        }
+
+        $result = $sitesClass::update($id, $fields);
+
+        if (!$result->isSuccess()) {
+            throw new \RuntimeException(
+                'Не удалось обновить сайт: ' . implode(', ', $result->getErrorMessages())
+            );
+        }
+    }
