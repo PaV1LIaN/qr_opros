@@ -1,57 +1,79 @@
 <?php
-$mode    = $arResult['MODE'] ?? 'create';
-$site    = $arResult['SITE'] ?? null;
-$siteId  = (int)($arResult['SITE_ID'] ?? 0);
 
-// значения по умолчанию для полей
-$nameValue = $_POST['NAME'] ?? ($site['UF_NAME'] ?? '');
-$codeValue = $_POST['CODE'] ?? ($site['UF_CODE'] ?? '');
+namespace Cc10\TypicalSites\Components;
 
-// права: пока просто показываем как список ID
-$viewersIds = $_POST['VIEWERS'][0] ?? (isset($arResult['VIEWERS']) ? implode(',', $arResult['VIEWERS']) : '');
-$adminsIds  = $_POST['ADMINS'][0]  ?? (isset($arResult['ADMINS']) ? implode(',', $arResult['ADMINS'])  : '');
-?>
+use CBitrixComponent;
+use Bitrix\Main\Context;
 
-<?php if (!empty($arResult['ERRORS'])): ?>
-    <div style="color:red;">
-        <?php foreach ($arResult['ERRORS'] as $error): ?>
-            <div><?= htmlspecialcharsbx($error) ?></div>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
 
-<h2><?= $mode === 'edit' ? 'Редактирование сайта' : 'Создание сайта' ?></h2>
+class SitesEditComponent extends CBitrixComponent
+{
+    protected function checkAccess(): bool
+    {
+        global $USER;
+        return $USER->IsAdmin(); // пока только админ
+    }
 
-<form method="post">
-    <?= bitrix_sessid_post() ?>
-    <?php if ($mode === 'edit'): ?>
-        <input type="hidden" name="SITE_ID" value="<?= $siteId ?>">
-    <?php endif; ?>
+    public function executeComponent()
+    {
+        global $USER;
 
-    <div>
-        <label>Название сайта:</label><br>
-        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($nameValue) ?>">
-    </div>
+        if (!$this->checkAccess()) {
+            ShowError("Нет прав на управление типовыми сайтами.");
+            return;
+        }
 
-    <div style="margin-top:5px;">
-        <label>Код сайта (URL):</label><br>
-        <input type="text" name="CODE" value="<?= htmlspecialcharsbx($codeValue) ?>">
-        <small>Например: training-portal</small>
-    </div>
+        $request = Context::getCurrent()->getRequest();
+        $this->arResult['ERRORS'] = [];
 
-    <div style="margin-top:5px;">
-        <label>VIEWERS (ID пользователей, через запятую):</label><br>
-        <input type="text" name="VIEWERS[]" value="<?= htmlspecialcharsbx($viewersIds) ?>" placeholder="Например: 1,2,3">
-    </div>
+        if ($request->isPost() && check_bitrix_sessid()) {
+            $name    = trim($request->getPost('NAME'));
+            $code    = trim($request->getPost('CODE'));
+            $viewers = (array)$request->getPost('VIEWERS');
+            $admins  = (array)$request->getPost('ADMINS');
 
-    <div style="margin-top:5px;">
-        <label>ADMINS (ID пользователей, через запятую):</label><br>
-        <input type="text" name="ADMINS[]" value="<?= htmlspecialcharsbx($adminsIds) ?>" placeholder="Например: 1,4">
-    </div>
+            if ($name === '') {
+                $this->arResult['ERRORS'][] = 'Не заполнено название.';
+            }
+            if (!preg_match('~^[a-z0-9\-_]+$~i', $code)) {
+                $this->arResult['ERRORS'][] = 'CODE может содержать только латиницу, цифры, - и _.';
+            }
 
-    <div style="margin-top:10px;">
-        <button type="submit">
-            <?= $mode === 'edit' ? 'Сохранить изменения' : 'Создать сайт' ?>
-        </button>
-    </div>
-</form>
+            if (empty($this->arResult['ERRORS'])) {
+                $service = new \Cc10\SiteService();
+
+                try {
+                    $siteId = $service->createSite([
+                        'NAME' => $name,
+                        'CODE' => $code,
+                    ], (int)$USER->GetID());
+
+                    $service->setSiteAccess($siteId, $viewers, $admins);
+
+                    // создаём папку для сайта
+                    $folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/' . $code . '/';
+                    if (!is_dir($folderPath)) {
+                        mkdir($folderPath, 0755, true);
+
+                        $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/templates/default/';
+                        if (is_dir($templatePath)) {
+                            foreach (scandir($templatePath) as $file) {
+                                if ($file === '.' || $file === '..') {
+                                    continue;
+                                }
+                                copy($templatePath . $file, $folderPath . $file);
+                            }
+                        }
+                    }
+
+                    LocalRedirect('/local/typical_sites/index.php');
+                } catch (\Throwable $e) {
+                    $this->arResult['ERRORS'][] = $e->getMessage();
+                }
+            }
+        }
+
+        $this->includeComponentTemplate();
+    }
+}
