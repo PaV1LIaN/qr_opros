@@ -1,103 +1,56 @@
-    /**
-     * Все сайты (для админа)
-     */
-    public function getAllSites(): array
-    {
-        $sitesClass = $this->sitesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 
-        $result = $sitesClass::getList([
-            'filter' => [],
-            'select' => [
-                'ID',
-                'UF_NAME',
-                'UF_CODE',
-                'UF_FOLDER',
-                'UF_ACTIVE',
-            ],
-            'order' => ['ID' => 'DESC'],
-        ]);
+global $USER;
 
-        $sites = [];
-        while ($row = $result->fetch()) {
-            $sites[] = $row;
-        }
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
 
-        return $sites;
-    }
+$APPLICATION->SetTitle("Администрирование типовых сайтов");
 
-    /**
-     * Сайт по ID
-     */
-    public function getSiteById(int $id): ?array
-    {
-        $sitesClass = $this->sitesClass;
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-        $row = $sitesClass::getList([
-            'filter' => ['=ID' => $id],
-            'select' => ['*'],
-            'limit'  => 1,
-        ])->fetch();
+$service = new \Cc10\SiteService();
+$sites   = $service->getAllSites();
+?>
 
-        return $row ?: null;
-    }
+<h1>Администрирование типовых сайтов</h1>
 
-    /**
-     * Права по сайту: массив из записей HL SiteUserAccess
-     * (ID, UF_USER, UF_ROLE)
-     */
-    public function getAccessForSite(int $siteId): array
-    {
-        $accessClass = $this->accessClass;
+<p>
+    <a href="/local/typical_sites/manage.php">Создать новый сайт</a>
+</p>
 
-        $result = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID', 'UF_USER', 'UF_ROLE'],
-        ]);
+<?php if (empty($sites)): ?>
+    <p>Сайтов пока нет.</p>
+<?php else: ?>
+    <table border="1" cellpadding="5" cellspacing="0">
+        <tr>
+            <th>ID</th>
+            <th>Название</th>
+            <th>CODE</th>
+            <th>URL</th>
+            <th>Активен</th>
+            <th>Действия</th>
+        </tr>
+        <?php foreach ($sites as $site): ?>
+            <tr>
+                <td><?= (int)$site['ID'] ?></td>
+                <td><?= htmlspecialcharsbx($site['UF_NAME']) ?></td>
+                <td><?= htmlspecialcharsbx($site['UF_CODE']) ?></td>
+                <td><?= htmlspecialcharsbx($site['UF_FOLDER']) ?></td>
+                <td><?= ($site['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
+                <td>
+                    <a href="/local/typical_sites/manage.php?site_id=<?= (int)$site['ID'] ?>">Редактировать</a>
+                    |
+                    <a href="<?= htmlspecialcharsbx($site['UF_FOLDER']) ?>" target="_blank">Открыть</a>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+    </table>
+<?php endif; ?>
 
-        $rows = [];
-        while ($row = $result->fetch()) {
-            $rows[] = $row;
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Обновить сайт по ID
-     *
-     * $data может содержать:
-     *  - NAME
-     *  - CODE
-     */
-    public function updateSite(int $id, array $data): void
-    {
-        $sitesClass = $this->sitesClass;
-
-        $fields = [];
-
-        if (isset($data['NAME'])) {
-            $fields['UF_NAME'] = (string)$data['NAME'];
-        }
-        if (isset($data['CODE'])) {
-            $code = trim((string)$data['CODE']);
-
-            if ($code === '') {
-                throw new \InvalidArgumentException('Пустой CODE сайта');
-            }
-
-            $fields['UF_CODE']   = $code;
-            $fields['UF_FOLDER'] = '/local/typical_sites/site.php?code=' . urlencode($code);
-        }
-
-        if (empty($fields)) {
-            return;
-        }
-
-        $result = $sitesClass::update($id, $fields);
-
-        if (!$result->isSuccess()) {
-            throw new \RuntimeException(
-                'Не удалось обновить сайт: ' . implode(', ', $result->getErrorMessages())
-            );
-        }
-    }
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
