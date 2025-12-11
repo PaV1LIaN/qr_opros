@@ -1,9 +1,52 @@
 <?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+use Bitrix\Main\Context;
 
-require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/components/sites.list/class.php';
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-class SiteBuilderTypicalSitesList extends \Cc10\TypicalSites\Components\SitesListComponent
-{
+$APPLICATION->SetTitle("Типовой сайт");
+
+global $USER;
+
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
+
+if ($code === '') {
+    ShowError("Код сайта не указан.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site) {
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+
+if (file_exists($folderPath . 'index.php')) {
+    include $folderPath . 'index.php';
+} else {
+    echo "Шаблон сайта не настроен.";
+}
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
