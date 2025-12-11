@@ -1,56 +1,11 @@
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-
-global $USER;
-
-if (!$USER->IsAdmin()) {
-    ShowError("Доступ запрещён");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
-    exit;
-}
-
-$APPLICATION->SetTitle("Администрирование типовых сайтов");
-
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
-
-$service = new \Cc10\SiteService();
-$sites   = $service->getAllSites();
+$APPLICATION->SetTitle("Управление типовыми сайтами");
 ?>
 
-<h1>Администрирование типовых сайтов</h1>
-
-<p>
-    <a href="/local/typical_sites/manage.php">Создать новый сайт</a>
-</p>
-
-<?php if (empty($sites)): ?>
-    <p>Сайтов пока нет.</p>
-<?php else: ?>
-    <table border="1" cellpadding="5" cellspacing="0">
-        <tr>
-            <th>ID</th>
-            <th>Название</th>
-            <th>CODE</th>
-            <th>URL</th>
-            <th>Активен</th>
-            <th>Действия</th>
-        </tr>
-        <?php foreach ($sites as $site): ?>
-            <tr>
-                <td><?= (int)$site['ID'] ?></td>
-                <td><?= htmlspecialcharsbx($site['UF_NAME']) ?></td>
-                <td><?= htmlspecialcharsbx($site['UF_CODE']) ?></td>
-                <td><?= htmlspecialcharsbx($site['UF_FOLDER']) ?></td>
-                <td><?= ($site['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
-                <td>
-                    <a href="/local/typical_sites/manage.php?site_id=<?= (int)$site['ID'] ?>">Редактировать</a>
-                    |
-                    <a href="<?= htmlspecialcharsbx($site['UF_FOLDER']) ?>" target="_blank">Открыть</a>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-    </table>
-<?php endif; ?>
+<?$APPLICATION->IncludeComponent("sitebuilder:typical.sites.edit", "", [
+    "SITE_ID" => $_GET["site_id"] ?? null,
+]);?>
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
