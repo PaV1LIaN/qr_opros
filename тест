@@ -1,11 +1,120 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Управление типовыми сайтами");
-?>
 
-<?$APPLICATION->IncludeComponent("sitebuilder:typical.sites.edit", "", [
-    "SITE_ID" => $_GET["site_id"] ?? null,
-]);?>
+namespace Cc10\TypicalSites\Components;
 
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+use CBitrixComponent;
+use Bitrix\Main\Context;
+
+require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
+
+class SitesEditComponent extends CBitrixComponent
+{
+    protected function checkAccess(): bool
+    {
+        global $USER;
+        return $USER->IsAdmin();
+    }
+
+    public function executeComponent()
+    {
+        global $USER;
+
+        if (!$this->checkAccess()) {
+            ShowError("Нет прав на управление сайтами.");
+            return;
+        }
+
+        $request = Context::getCurrent()->getRequest();
+        $this->arResult['ERRORS'] = [];
+
+        $service = new \Cc10\SiteService();
+
+        // Режим редактирования?
+        $siteId = (int)($this->arParams['SITE_ID'] ?? 0);
+        $this->arResult['MODE']   = $siteId > 0 ? 'edit' : 'create';
+        $this->arResult['SITE_ID'] = $siteId;
+        $this->arResult['SITE']   = null;
+        $this->arResult['VIEWERS'] = [];
+        $this->arResult['ADMINS']  = [];
+
+        if ($siteId > 0) {
+            $site = $service->getSiteById($siteId);
+            if (!$site) {
+                $this->arResult['ERRORS'][] = "Сайт с ID {$siteId} не найден.";
+            } else {
+                $this->arResult['SITE'] = $site;
+
+                // права
+                $accessRows = $service->getAccessForSite($siteId);
+                foreach ($accessRows as $row) {
+                    if ($row['UF_ROLE'] === 'VIEWER') {
+                        $this->arResult['VIEWERS'][] = (int)$row['UF_USER'];
+                    } elseif ($row['UF_ROLE'] === 'ADMIN') {
+                        $this->arResult['ADMINS'][] = (int)$row['UF_USER'];
+                    }
+                }
+            }
+        }
+
+        if ($request->isPost() && check_bitrix_sessid()) {
+            $name    = trim($request->getPost('NAME'));
+            $code    = trim($request->getPost('CODE'));
+            $viewers = (array)$request->getPost('VIEWERS');
+            $admins  = (array)$request->getPost('ADMINS');
+
+            if ($name === '') {
+                $this->arResult['ERRORS'][] = 'Не заполнено название.';
+            }
+            if (!preg_match('~^[a-z0-9\-_]+$~i', $code)) {
+                $this->arResult['ERRORS'][] = 'CODE может содержать только латиницу, цифры, - и _.';
+            }
+
+            if (empty($this->arResult['ERRORS'])) {
+                try {
+                    if ($this->arResult['MODE'] === 'edit' && $siteId > 0) {
+                        // обновляем сайт
+                        $service->updateSite($siteId, [
+                            'NAME' => $name,
+                            'CODE' => $code,
+                        ]);
+
+                        // права перезаписываем
+                        $service->setSiteAccess($siteId, $viewers, $admins);
+
+                        // папку под новый CODE можно не трогать, это отдельная тема
+                    } else {
+                        // создаём новый
+                        $siteId = $service->createSite([
+                            'NAME' => $name,
+                            'CODE' => $code,
+                        ], (int)$USER->GetID());
+
+                        $service->setSiteAccess($siteId, $viewers, $admins);
+
+                        // папка сайта
+                        $folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/' . $code . '/';
+                        if (!is_dir($folderPath)) {
+                            mkdir($folderPath, 0755, true);
+
+                            $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/templates/default/';
+                            if (is_dir($templatePath)) {
+                                foreach (scandir($templatePath) as $file) {
+                                    if ($file === '.' || $file === '..') {
+                                        continue;
+                                    }
+                                    copy($templatePath . $file, $folderPath . $file);
+                                }
+                            }
+                        }
+                    }
+
+                    LocalRedirect('/local/typical_sites/admin.php');
+                } catch (\Throwable $e) {
+                    $this->arResult['ERRORS'][] = $e->getMessage();
+                }
+            }
+        }
+
+        $this->includeComponentTemplate();
+    }
+}
