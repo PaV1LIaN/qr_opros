@@ -1,5 +1,4 @@
-$service->logAction($siteId, (int)$USER->GetID(), 'ACCESS_UPDATE', 'access', 0, [
-    'viewers' => $viewers,
-    'admins' => $admins,
-    'developers' => $devs,
+$service->logAction((int)$site['ID'], (int)$USER->GetID(), 'PAGE_CREATE', 'page', (int)$newPageId, [
+    'title' => $title,
+    'slug' => $slug,
 ]);
