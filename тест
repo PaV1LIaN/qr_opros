@@ -1,63 +1,89 @@
-    public function getAllSites(): array
-    {
-        $sitesClass = $this->sitesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+$APPLICATION->SetTitle("Админка типовых сайтов");
 
-        $res = $sitesClass::getList([
-            'select' => ['ID', 'UF_NAME', 'UF_CODE', 'UF_FOLDER', 'UF_ACTIVE', 'UF_CREATED_BY', 'UF_CREATED_AT'],
-            'order' => ['ID' => 'DESC'],
-        ]);
+global $USER;
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
 
-        $sites = [];
-        while ($row = $res->fetch()) {
-            $sites[] = $row;
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+$service = new \Cc10\SiteService();
+
+// действия (POST)
+$request = \Bitrix\Main\Context::getCurrent()->getRequest();
+if ($request->isPost() && check_bitrix_sessid()) {
+    $action = (string)$request->getPost('action');
+    $siteId = (int)$request->getPost('site_id');
+
+    try {
+        if ($action === 'disable') {
+            $service->setActive($siteId, false);
+        } elseif ($action === 'enable') {
+            $service->setActive($siteId, true);
+        } elseif ($action === 'delete') {
+            $service->deleteSite($siteId);
         }
-        return $sites;
+        LocalRedirect('/local/typical_sites/admin.php');
+    } catch (\Throwable $e) {
+        echo '<div style="color:red;">' . htmlspecialcharsbx($e->getMessage()) . '</div>';
     }
+}
 
-    public function setActive(int $siteId, bool $active): void
-    {
-        $sitesClass = $this->sitesClass;
+$sites = $service->getAllSites();
+?>
 
-        $res = $sitesClass::update($siteId, ['UF_ACTIVE' => $active]);
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException('Не удалось изменить активность: ' . implode(', ', $res->getErrorMessages()));
-        }
-    }
+<h1>Администрирование типовых сайтов</h1>
 
-    public function deleteSite(int $siteId): void
-    {
-        $sitesClass = $this->sitesClass;
-        $accessClass = $this->accessClass;
+<p>
+    <a href="/local/typical_sites/manage.php">Создать новый сайт</a>
+</p>
 
-        // Сначала удаляем доступы
-        $old = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID'],
-        ]);
-        while ($row = $old->fetch()) {
-            $accessClass::delete((int)$row['ID']);
-        }
+<?php if (empty($sites)): ?>
+    <p>Сайтов пока нет.</p>
+<?php else: ?>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr>
+            <th>ID</th>
+            <th>Название</th>
+            <th>CODE</th>
+            <th>URL</th>
+            <th>Активен</th>
+            <th>Действия</th>
+        </tr>
 
-        // Потом удаляем сайт
-        $res = $sitesClass::delete($siteId);
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException('Не удалось удалить сайт: ' . implode(', ', $res->getErrorMessages()));
-        }
-    }
+        <?php foreach ($sites as $s): ?>
+            <tr>
+                <td><?= (int)$s['ID'] ?></td>
+                <td><?= htmlspecialcharsbx($s['UF_NAME']) ?></td>
+                <td><?= htmlspecialcharsbx($s['UF_CODE']) ?></td>
+                <td><a href="<?= htmlspecialcharsbx($s['UF_FOLDER']) ?>" target="_blank"><?= htmlspecialcharsbx($s['UF_FOLDER']) ?></a></td>
+                <td><?= ($s['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
+                <td>
+                    <a href="/local/typical_sites/access.php?site_id=<?= (int)$s['ID'] ?>">Доступы</a>
 
-    public function getAccessForSite(int $siteId): array
-    {
-        $accessClass = $this->accessClass;
+                    <form method="post" style="display:inline;">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                        <?php if ($s['UF_ACTIVE']): ?>
+                            <button type="submit" name="action" value="disable">Выключить</button>
+                        <?php else: ?>
+                            <button type="submit" name="action" value="enable">Включить</button>
+                        <?php endif; ?>
+                    </form>
 
-        $res = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID', 'UF_USER', 'UF_ROLE'],
-            'order' => ['ID' => 'ASC'],
-        ]);
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                        <button type="submit" name="action" value="delete">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+    </table>
+<?php endif; ?>
 
-        $rows = [];
-        while ($row = $res->fetch()) {
-            $rows[] = $row;
-        }
-        return $rows;
-    }
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
