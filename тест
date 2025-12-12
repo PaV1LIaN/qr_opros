@@ -1,12 +1,89 @@
-<?php if ($canManageDevelopers): ?>
-    <div style="margin-top:10px;">
-        <label>DEVELOPERS:</label><br>
-        <div id="ts-devs"></div>
-        <div id="ts-devs-inputs"></div>
-        <small>Осторожно: Developer = полный доступ к управлению.</small>
-    </div>
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+$APPLICATION->SetTitle("Админка типовых сайтов");
+
+global $USER;
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+$service = new \Cc10\SiteService();
+
+// действия (POST)
+$request = \Bitrix\Main\Context::getCurrent()->getRequest();
+if ($request->isPost() && check_bitrix_sessid()) {
+    $action = (string)$request->getPost('action');
+    $siteId = (int)$request->getPost('site_id');
+
+    try {
+        if ($action === 'disable') {
+            $service->setActive($siteId, false);
+        } elseif ($action === 'enable') {
+            $service->setActive($siteId, true);
+        } elseif ($action === 'delete') {
+            $service->deleteSite($siteId);
+        }
+        LocalRedirect('/local/typical_sites/admin.php');
+    } catch (\Throwable $e) {
+        echo '<div style="color:red;">' . htmlspecialcharsbx($e->getMessage()) . '</div>';
+    }
+}
+
+$sites = $service->getAllSites();
+?>
+
+<h1>Администрирование типовых сайтов</h1>
+
+<p>
+    <a href="/local/typical_sites/manage.php">Создать новый сайт</a>
+</p>
+
+<?php if (empty($sites)): ?>
+    <p>Сайтов пока нет.</p>
 <?php else: ?>
-    <div style="margin-top:10px; padding:10px; background:#fff3cd; border:1px solid #ffeeba;">
-        DEVELOPERS может менять только DEVELOPER или глобальный админ.
-    </div>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr>
+            <th>ID</th>
+            <th>Название</th>
+            <th>CODE</th>
+            <th>URL</th>
+            <th>Активен</th>
+            <th>Действия</th>
+        </tr>
+
+        <?php foreach ($sites as $s): ?>
+            <tr>
+                <td><?= (int)$s['ID'] ?></td>
+                <td><?= htmlspecialcharsbx($s['UF_NAME']) ?></td>
+                <td><?= htmlspecialcharsbx($s['UF_CODE']) ?></td>
+                <td><a href="<?= htmlspecialcharsbx($s['UF_FOLDER']) ?>" target="_blank"><?= htmlspecialcharsbx($s['UF_FOLDER']) ?></a></td>
+                <td><?= ($s['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
+                <td>
+                    <a href="/local/typical_sites/access_manage.php?code=<?= urlencode($site['UF_CODE']) ?>">Доступы</a>
+
+                    <form method="post" style="display:inline;">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                        <?php if ($s['UF_ACTIVE']): ?>
+                            <button type="submit" name="action" value="disable">Выключить</button>
+                        <?php else: ?>
+                            <button type="submit" name="action" value="enable">Включить</button>
+                        <?php endif; ?>
+                    </form>
+
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                        <button type="submit" name="action" value="delete">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+    </table>
 <?php endif; ?>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
