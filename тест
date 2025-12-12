@@ -1,2 +1,116 @@
-<a href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Блоки</a>
-|
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+
+use Bitrix\Main\Context;
+
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+global $USER;
+$request = Context::getCurrent()->getRequest();
+
+$code = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
+
+if ($code === '' || $pageId <= 0) {
+    ShowError("Не указан code или page_id");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+if (!$site) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+if (!in_array($role, ['ADMIN','DEVELOPER'], true) && !$USER->IsAdmin()) {
+    ShowError("Нет прав на редактирование блоков");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$page = $service->getPageById($pageId);
+if (!$page || (int)$page['UF_SITE'] !== (int)$site['ID']) {
+    ShowError("Страница не найдена или не принадлежит сайту");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+// POST: delete
+if ($request->isPost() && check_bitrix_sessid()) {
+    $action = (string)$request->getPost('action');
+    $blockId = (int)$request->getPost('block_id');
+
+    try {
+        if ($action === 'delete') {
+            $service->deleteBlock($blockId, (int)$site['ID'], (int)$page['ID']);
+        }
+        LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$page['ID']);
+    } catch (\Throwable $e) {
+        echo '<div style="color:red;">' . htmlspecialcharsbx($e->getMessage()) . '</div>';
+    }
+}
+
+$blocks = $service->getBlocksForPage((int)$site['ID'], (int)$page['ID'], false);
+
+$APPLICATION->SetTitle("Блоки страницы");
+?>
+
+<h1>Блоки: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?> / <?= htmlspecialcharsbx((string)$page['UF_TITLE']) ?></h1>
+
+<p>
+    <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">← Назад к странице</a>
+    &nbsp;|&nbsp;
+    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← К списку страниц</a>
+</p>
+
+<p>
+    <a href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">+ Добавить блок</a>
+    &nbsp;|&nbsp;
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
+</p>
+
+<?php if (empty($blocks)): ?>
+    <p>Блоков пока нет (будет показан UF_CONTENT страницы).</p>
+<?php else: ?>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr>
+            <th>ID</th>
+            <th>TYPE</th>
+            <th>Заголовок</th>
+            <th>SORT</th>
+            <th>Активен</th>
+            <th>Действия</th>
+        </tr>
+        <?php foreach ($blocks as $b): ?>
+            <tr>
+                <td><?= (int)$b['ID'] ?></td>
+                <td><?= htmlspecialcharsbx((string)$b['UF_TYPE']) ?></td>
+                <td><?= htmlspecialcharsbx((string)$b['UF_TITLE']) ?></td>
+                <td><?= (int)$b['UF_SORT'] ?></td>
+                <td><?= ($b['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
+                <td>
+                    <a href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>&block_id=<?= (int)$b['ID'] ?>">Редактировать</a>
+                    |
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Удалить блок?');">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="block_id" value="<?= (int)$b['ID'] ?>">
+                        <button type="submit">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+    </table>
+<?php endif; ?>
+
+<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
