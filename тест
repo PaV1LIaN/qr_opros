@@ -1,51 +1,12 @@
-if ($request->isPost() && check_bitrix_sessid()) {
-    $viewers = array_unique(array_filter(array_map('intval', (array)$request->getPost('VIEWERS'))));
-    $admins  = array_unique(array_filter(array_map('intval', (array)$request->getPost('ADMINS'))));
-    $devsReq = array_unique(array_filter(array_map('intval', (array)$request->getPost('DEVELOPERS'))));
-
-    // Текущие девелоперы в базе (их ADMIN не должен менять)
-    $access = $service->getAccessForSite($siteId);
-    $devsCurrent = [];
-    foreach ($access as $row) {
-        if ($row['UF_ROLE'] === 'DEVELOPER') {
-            $devsCurrent[] = (int)$row['UF_USER'];
-        }
-    }
-    $devsCurrent = array_values(array_unique($devsCurrent));
-
-    // Если нет прав управлять DEVELOPER — сохраняем как было
-    $devs = $canManageDevelopers ? $devsReq : $devsCurrent;
-
-    // Защита: нельзя потерять себе управление
-    $me = (int)$USER->GetID();
-
-    if (!$USER->IsAdmin()) {
-        // если ты DEVELOPER — должен оставаться DEVELOPER или ADMIN
-        if ($role === 'DEVELOPER') {
-            if (!in_array($me, $devs, true) && !in_array($me, $admins, true)) {
-                $errors[] = "Нельзя убрать себе DEVELOPER/ADMIN на этом сайте";
-            }
-        }
-        // если ты ADMIN — должен оставаться ADMIN (DEVELOPER ты и так не можешь назначить)
-        if ($role === 'ADMIN') {
-            if (!in_array($me, $admins, true)) {
-                $errors[] = "Нельзя убрать себе ADMIN на этом сайте";
-            }
-        }
-    }
-
-    // Защита: ADMIN не может подмешать себя в DEVELOPER через POST
-    if (!$canManageDevelopers && !empty($devsReq)) {
-        // просто игнорируем, но можно и показать предупреждение:
-        // $errors[] = "Вы не можете менять список DEVELOPERS";
-    }
-
-    if (empty($errors)) {
-        try {
-            $service->setSiteAccess($siteId, $viewers, $admins, $devs);
-            LocalRedirect('/local/typical_sites/site.php?code=' . urlencode($code));
-        } catch (\Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-    }
-}
+<?php if ($canManageDevelopers): ?>
+    <div style="margin-top:10px;">
+        <label>DEVELOPERS:</label><br>
+        <div id="ts-devs"></div>
+        <div id="ts-devs-inputs"></div>
+        <small>Осторожно: Developer = полный доступ к управлению.</small>
+    </div>
+<?php else: ?>
+    <div style="margin-top:10px; padding:10px; background:#fff3cd; border:1px solid #ffeeba;">
+        DEVELOPERS может менять только DEVELOPER или глобальный админ.
+    </div>
+<?php endif; ?>
