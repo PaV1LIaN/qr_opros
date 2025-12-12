@@ -1,15 +1,27 @@
-[RuntimeException] 
-Could not start session because headers have already been sent. "/var/www/html/bx-site/local/typical_sites/site.php":1. (0)
-/var/www/html/bx-site/bitrix/modules/main/lib/session/session.php:144
-#0: Bitrix\Main\Session\Session->start()
-	/var/www/html/bx-site/bitrix/modules/main/lib/session/kernelsessionproxy.php:47
-#1: Bitrix\Main\Session\KernelSessionProxy->start()
-	/var/www/html/bx-site/bitrix/modules/main/include.php:1
-#2: require_once(string)
-	/var/www/html/bx-site/bitrix/modules/main/include/prolog_before.php:19
-#3: require_once(string)
-	/var/www/html/bx-site/bitrix/modules/main/include/prolog.php:10
-#4: require_once(string)
-	/var/www/html/bx-site/bitrix/header.php:1
-#5: require(string)
-	/var/www/html/bx-site/local/typical_sites/site.php:3
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+use Bitrix\Main\Context;
+
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+global $USER;
+
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
+
+if ($code === '') { ShowError("Код сайта не указан."); require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); exit; }
+if (!$USER->IsAuthorized()) { ShowError("Требуется авторизация."); require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); exit; }
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+if (!$site) { ShowError("Сайт не найден или не активен."); require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); exit; }
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+if (!$role) { ShowError("У вас нет доступа к этому сайту."); require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); exit; }
+
+$folderPath = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+if (file_exists($folderPath . 'index.php')) { include $folderPath . 'index.php'; }
+else { echo "Шаблон сайта не настроен."; }
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
