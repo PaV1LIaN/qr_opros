@@ -12,7 +12,7 @@ if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
     </div>
 <?php endif; ?>
 
-<form method="post">
+<form method="post" id="ts-form">
     <?= bitrix_sessid_post() ?>
 
     <div>
@@ -26,18 +26,16 @@ if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
         <small>Например: training-portal</small>
     </div>
 
-    <div style="margin-top:10px;">
+    <div style="margin-top:12px;">
         <label>Пользователи (VIEWERS):</label><br>
-        <div id="ts-viewers-selector"></div>
+        <div id="ts-viewers"></div>
         <div id="ts-viewers-inputs"></div>
-        <small>Выбери пользователей, которые смогут заходить на сайт.</small>
     </div>
 
-    <div style="margin-top:10px;">
-        <label>Администраторы сайта (ADMINS):</label><br>
-        <div id="ts-admins-selector"></div>
+    <div style="margin-top:12px;">
+        <label>Администраторы (ADMINS):</label><br>
+        <div id="ts-admins"></div>
         <div id="ts-admins-inputs"></div>
-        <small>Выбери тех, кто сможет править сайт.</small>
     </div>
 
     <div style="margin-top:15px;">
@@ -46,74 +44,63 @@ if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
 </form>
 
 <script>
-(function () {
-  function mountSelector(containerId, inputsId, inputName) {
-    const inputsContainer = document.getElementById(inputsId);
+BX.ready(function () {
+  function buildHiddenInputs(selector, inputsContainerId, inputName) {
+    const container = document.getElementById(inputsContainerId);
+    container.innerHTML = "";
 
-    function renderInputs(ids) {
-      inputsContainer.innerHTML = "";
-      ids.forEach(id => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = inputName + "[]";
-        input.value = id;
-        inputsContainer.appendChild(input);
-      });
-    }
+    // getTags() — штатный метод TagSelector :contentReference[oaicite:1]{index=1}
+    const tags = selector.getTags();
 
-    const selectedIds = [];
+    tags.forEach(tag => {
+      // TagItem содержит id + entityId (user/department/etc)
+      const entityId = tag.getEntityId ? tag.getEntityId() : null;
+      const rawId = tag.getId ? tag.getId() : null;
 
+      if (entityId !== "user") return;
+
+      const id = parseInt(rawId, 10);
+      if (!id) return;
+
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = inputName + "[]";
+      input.value = id;
+      container.appendChild(input);
+    });
+  }
+
+  function makeSelector(renderNodeId, inputsNodeId, inputName, context) {
     const selector = new BX.UI.EntitySelector.TagSelector({
-      id: containerId,
+      id: renderNodeId,
+      // multiple по умолчанию true, но оставим явно :contentReference[oaicite:2]{index=2}
+      multiple: true,
       dialogOptions: {
-        context: containerId,
-        entities: [
-          { id: "user" }
-        ],
-        multiple: true
+        context: context,
+        entities: [{ id: "user" }],
+        // на всякий случай (в разных сборках бывает полезно)
+        multiple: true,
+        enableSearch: true
       },
       events: {
-        onTagAdd: (event) => {
-          const item = event.getData().tag.getDialogItem();
-          if (!item) return;
-
-          const entityId = item.getEntityId(); // "user"
-          const id = item.getId();
-
-          if (entityId === "user") {
-            const numericId = parseInt(id, 10);
-            if (!selectedIds.includes(numericId)) {
-              selectedIds.push(numericId);
-              renderInputs(selectedIds);
-            }
-          }
-        },
-        onTagRemove: (event) => {
-          const item = event.getData().tag.getDialogItem();
-          if (!item) return;
-
-          const entityId = item.getEntityId();
-          const id = item.getId();
-
-          if (entityId === "user") {
-            const numericId = parseInt(id, 10);
-            const idx = selectedIds.indexOf(numericId);
-            if (idx >= 0) {
-              selectedIds.splice(idx, 1);
-              renderInputs(selectedIds);
-            }
-          }
-        }
+        onAfterTagAdd: () => buildHiddenInputs(selector, inputsNodeId, inputName),
+        onAfterTagRemove: () => buildHiddenInputs(selector, inputsNodeId, inputName),
       }
     });
 
-    selector.renderTo(document.getElementById(containerId));
+    selector.renderTo(document.getElementById(renderNodeId));
+    buildHiddenInputs(selector, inputsNodeId, inputName);
 
-    // init empty hidden inputs (на всякий)
-    renderInputs(selectedIds);
+    return selector;
   }
 
-  mountSelector("ts-viewers-selector", "ts-viewers-inputs", "VIEWERS");
-  mountSelector("ts-admins-selector", "ts-admins-inputs", "ADMINS");
-})();
+  const viewersSelector = makeSelector("ts-viewers", "ts-viewers-inputs", "VIEWERS", "TYPICAL_SITES_VIEWERS");
+  const adminsSelector  = makeSelector("ts-admins",  "ts-admins-inputs",  "ADMINS",  "TYPICAL_SITES_ADMINS");
+
+  // На submit ещё раз синхронизируем hidden-поля
+  document.getElementById("ts-form").addEventListener("submit", function () {
+    buildHiddenInputs(viewersSelector, "ts-viewers-inputs", "VIEWERS");
+    buildHiddenInputs(adminsSelector,  "ts-admins-inputs",  "ADMINS");
+  });
+});
 </script>
