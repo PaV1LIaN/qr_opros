@@ -1,70 +1,109 @@
-public function getPagesForSite(int $siteId): array
-{
-    $pagesClass = $this->pagesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-    $res = $pagesClass::getList([
-        'filter' => [
-            '=UF_SITE' => $siteId,
-            '=UF_ACTIVE' => true,
-        ],
-        'select' => ['ID','UF_SLUG','UF_TITLE','UF_CONTENT','UF_SORT'],
-        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
-    ]);
+use Bitrix\Main\Context;
 
-    $pages = [];
-    while ($row = $res->fetch()) {
-        $pages[] = $row;
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+global $USER;
+$APPLICATION->SetTitle("Типовой сайт");
+
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
+
+if ($code === '') {
+    ShowError("Код сайта не указан.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+
+// Сайт (только активный)
+$site = $service->getSiteByCode($code);
+if (!$site) {
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Доступ
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Страницы (HL SitePages)
+try {
+    // Создаём дефолтные страницы, если их ещё нет
+    $service->ensureDefaultPages((int)$site['ID']);
+
+    // Список страниц для меню
+    $pages = $service->getPagesForSite((int)$site['ID']);
+
+    // Какая страница открыта
+    $pageSlug = trim((string)$request->getQuery('page'));
+    if ($pageSlug === '') {
+        $pageSlug = 'index';
     }
-    return $pages;
+
+    $page = $service->getPageBySlug((int)$site['ID'], $pageSlug);
+
+    // fallback на первую страницу
+    if (!$page && !empty($pages)) {
+        $page = $pages[0];
+        $pageSlug = (string)$page['UF_SLUG'];
+    }
+
+} catch (\Throwable $e) {
+    ShowError("Ошибка загрузки страниц: " . $e->getMessage());
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function getPageBySlug(int $siteId, string $slug): ?array
-{
-    $pagesClass = $this->pagesClass;
+// Вывод
+echo '<h1>' . htmlspecialcharsbx((string)$site['UF_NAME']) . '</h1>';
 
-    $slug = trim($slug);
-    if ($slug === '') $slug = 'index';
+// Меню
+if (!empty($pages)) {
+    echo '<nav style="margin:10px 0; padding:10px; border:1px solid #ddd;">';
 
-    $row = $pagesClass::getList([
-        'filter' => [
-            '=UF_SITE' => $siteId,
-            '=UF_SLUG' => $slug,
-            '=UF_ACTIVE' => true,
-        ],
-        'select' => ['*'],
-        'limit' => 1,
-    ])->fetch();
+    foreach ($pages as $p) {
+        $slug  = (string)$p['UF_SLUG'];
+        $title = (string)$p['UF_TITLE'];
 
-    return $row ?: null;
+        $url = '/local/typical_sites/site.php?code=' . urlencode((string)$site['UF_CODE']) . '&page=' . urlencode($slug);
+
+        $style = ($slug === $pageSlug)
+            ? 'font-weight:bold; text-decoration:underline; margin-right:12px;'
+            : 'margin-right:12px;';
+
+        echo '<a style="' . $style . '" href="' . htmlspecialcharsbx($url) . '">'
+            . htmlspecialcharsbx($title)
+            . '</a>';
+    }
+
+    echo '</nav>';
 }
 
-public function ensureDefaultPages(int $siteId): void
-{
-    $pagesClass = $this->pagesClass;
+// Контент
+if ($page) {
+    $title = (string)$page['UF_TITLE'];
+    $content = (string)$page['UF_CONTENT'];
 
-    // если уже есть страницы — ничего не делаем
-    $exists = $pagesClass::getList([
-        'filter' => ['=UF_SITE' => $siteId],
-        'select' => ['ID'],
-        'limit' => 1,
-    ])->fetch();
-    if ($exists) return;
-
-    $pagesClass::add([
-        'UF_SITE' => $siteId,
-        'UF_SLUG' => 'index',
-        'UF_TITLE' => 'Главная',
-        'UF_CONTENT' => '<p>Добро пожаловать!</p>',
-        'UF_SORT' => 100,
-        'UF_ACTIVE' => true,
-    ]);
-
-    $pagesClass::add([
-        'UF_SITE' => $siteId,
-        'UF_SLUG' => 'contacts',
-        'UF_TITLE' => 'Контакты',
-        'UF_CONTENT' => '<p>Контакты компании</p>',
-        'UF_SORT' => 200,
-        'UF_ACTIVE' => true,
-    ]);
+    echo '<h2>' . htmlspecialcharsbx($title) . '</h2>';
+    // UF_CONTENT — HTML, поэтому не экранируем
+    echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . $content . '</div>';
+} else {
+    echo '<p>Страницы не найдены.</p>';
 }
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
