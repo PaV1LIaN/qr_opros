@@ -1,3 +1,132 @@
-[Error] 
-Call to protected method Cc10\SiteService::getEntityClass() from global scope (0)
-/var/www/html/bx-site/local/typical_sites/audit.php:52
+Понял: у тебя `getEntityClass()` в `SiteService` **protected**, поэтому из `audit.php` его вызывать нельзя. Исправляем правильно: **не трогаем protected**, а даём публичный метод в сервисе, который вернёт аудит-логи с фильтром.
+
+Сделай 2 правки.
+
+---
+
+## 1) SiteService.php — добавь публичные методы для аудита с фильтром
+
+В `SiteService.php` (внутри класса `SiteService`, в конец перед `}`) добавь **два метода**:
+
+```php
+public function getAuditCountForSiteFiltered(int $siteId, string $action = ''): int
+{
+    $auditClass = $this->auditClass;
+
+    $filter = ['=UF_SITE' => $siteId];
+    $action = strtoupper(trim($action));
+    if ($action !== '') {
+        $filter['=UF_ACTION'] = $action;
+    }
+
+    $row = $auditClass::getList([
+        'filter' => $filter,
+        'select' => ['CNT'],
+        'runtime' => [
+            new \Bitrix\Main\Entity\ExpressionField('CNT', 'COUNT(1)')
+        ],
+    ])->fetch();
+
+    return (int)($row['CNT'] ?? 0);
+}
+
+public function getAuditForSiteFiltered(int $siteId, string $action = '', int $limit = 50, int $offset = 0): array
+{
+    $auditClass = $this->auditClass;
+
+    $filter = ['=UF_SITE' => $siteId];
+    $action = strtoupper(trim($action));
+    if ($action !== '') {
+        $filter['=UF_ACTION'] = $action;
+    }
+
+    $res = $auditClass::getList([
+        'filter' => $filter,
+        'select' => ['ID','UF_SITE','UF_USER','UF_ACTION','UF_ENTITY','UF_ENTITY_ID','UF_DATA','UF_CREATED_AT'],
+        'order' => ['UF_CREATED_AT' => 'DESC', 'ID' => 'DESC'],
+        'limit' => $limit,
+        'offset' => $offset,
+    ]);
+
+    $rows = [];
+    while ($row = $res->fetch()) {
+        $rows[] = $row;
+    }
+
+    return $rows;
+}
+
+public function getAuditActionsForSite(int $siteId): array
+{
+    $auditClass = $this->auditClass;
+
+    $actions = [];
+    $res = $auditClass::getList([
+        'filter' => ['=UF_SITE' => $siteId],
+        'select' => ['UF_ACTION'],
+        'order' => ['UF_ACTION' => 'ASC'],
+    ]);
+
+    while ($row = $res->fetch()) {
+        $a = (string)($row['UF_ACTION'] ?? '');
+        if ($a !== '') {
+            $actions[$a] = true;
+        }
+    }
+
+    $list = array_keys($actions);
+    sort($list);
+    return $list;
+}
+```
+
+---
+
+## 2) audit.php — убери вызов getEntityClass и используй сервисные методы
+
+В `audit.php` **удали** блок, где было:
+
+```php
+$auditClass = $service->getEntityClass('SiteAuditLog');
+...
+$totalRow = $auditClass::getList(...)
+...
+$res = $auditClass::getList(...)
+...
+$actionsRes = $auditClass::getList(...)
+```
+
+И замени на:
+
+```php
+// фильтр по action
+$action = strtoupper(trim((string)$request->getQuery('action')));
+
+// пагинация
+$page = max(1, (int)$request->getQuery('p'));
+$limit = 50;
+$offset = ($page - 1) * $limit;
+
+$total = $service->getAuditCountForSiteFiltered($siteId, $action);
+$rows  = $service->getAuditForSiteFiltered($siteId, $action, $limit, $offset);
+$actionsAll = $service->getAuditActionsForSite($siteId);
+
+// соберём userIds из rows
+$userIds = [];
+foreach ($rows as $r) {
+    $uid = (int)($r['UF_USER'] ?? 0);
+    if ($uid > 0) $userIds[$uid] = true;
+}
+```
+
+Остальная часть `audit.php` (маппинг пользователей через `CUser::GetList`, таблица, пагинация, фильтр) — остаётся как я присылал.
+
+---
+
+### Почему так правильно
+
+* `getEntityClass()` остаётся protected (как и должно быть)
+* контроллеры/страницы работают через **публичный API сервиса**
+* дальше можно расширять фильтры (по entity, по user, по периоду) не трогая страницы
+
+Если хочешь — я могу прислать **полностью готовый audit.php целиком** уже в рабочем виде под твою текущую структуру `SiteService` (чтобы ты просто заменил файл и всё).
