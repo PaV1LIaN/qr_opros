@@ -2,18 +2,18 @@
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
-use Bitrix\Main\Loader;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 global $USER, $APPLICATION;
 
 $request = Context::getCurrent()->getRequest();
+
 $code = trim((string)$request->getQuery('code'));
 $pageId = (int)$request->getQuery('page_id');
 
-if ($code === '') {
-    ShowError("Не указан code");
+if ($code === '' || $pageId <= 0) {
+    ShowError("Не указан code или page_id");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
@@ -25,8 +25,8 @@ if (!$USER->IsAuthorized()) {
 }
 
 $service = new \Cc10\SiteService();
-$site = $service->getSiteByCode($code);
 
+$site = $service->getSiteByCode($code);
 if (!$site) {
     ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
@@ -36,98 +36,58 @@ if (!$site) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на редактирование страниц");
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
+    ShowError("Нет прав на редактирование блоков");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-$errors = [];
-$page = null;
-
-if ($pageId > 0) {
-    $page = $service->getPageById($pageId);
-    if (!$page) {
-        $errors[] = "Страница не найдена";
-        $pageId = 0;
-    } elseif ((int)$page['UF_SITE'] !== $siteId) {
-        $errors[] = "Страница не принадлежит этому сайту";
-        $page = null;
-        $pageId = 0;
-    }
+$page = $service->getPageById($pageId);
+if (!$page || (int)$page['UF_SITE'] !== $siteId) {
+    ShowError("Страница не найдена или не принадлежит этому сайту");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
+// POST: удалить блок
+$errors = [];
 if ($request->isPost() && check_bitrix_sessid()) {
-    $title = (string)$request->getPost('TITLE');
-    $slug  = (string)$request->getPost('SLUG');
-    $sort  = (int)$request->getPost('SORT');
-    $active = ($request->getPost('ACTIVE') === 'Y');
-
-    // CONTENT может прийти из html-редактора или textarea
-    $content = (string)$request->getPost('CONTENT');
+    $action = (string)$request->getPost('action');
+    $blockId = (int)$request->getPost('block_id');
 
     try {
-        if ($pageId > 0) {
-            $service->updatePage($pageId, $siteId, [
-                'TITLE' => $title,
-                'SLUG' => $slug,
-                'SORT' => $sort,
-                'ACTIVE' => $active,
-                'CONTENT' => $content,
-            ]);
+        if ($action === 'delete' && $blockId > 0) {
+            $service->deleteBlock($blockId, $siteId, (int)$page['ID']);
 
             // Audit
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
-                'title' => $title,
-                'slug' => $slug,
-                'sort' => $sort,
-                'active' => $active,
-            ]);
-
-        } else {
-            $newPageId = $service->addPage($siteId, [
-                'TITLE' => $title,
-                'SLUG' => $slug,
-                'SORT' => $sort,
-                'ACTIVE' => $active,
-                'CONTENT' => $content,
-            ]);
-
-            // Audit
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
-                'title' => $title,
-                'slug' => $slug,
-                'sort' => $sort,
-                'active' => $active,
+            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_DELETE', 'block', $blockId, [
+                'page_id' => (int)$page['ID'],
             ]);
         }
 
-        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
+        LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$page['ID']);
     } catch (\Throwable $e) {
         $errors[] = $e->getMessage();
     }
 }
 
-// значения для формы (учитываем POST при ошибке)
-$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
-$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
-$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
-$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
-if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
-    $activeValue = 'N';
-}
-$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
+$blocks = $service->getBlocksForPage($siteId, (int)$page['ID'], false);
 
-$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
+$APPLICATION->SetTitle("Блоки страницы");
 ?>
 
-<h1><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы (<?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>)</h1>
+<h1>Блоки: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?> / <?= htmlspecialcharsbx((string)$page['UF_TITLE']) ?></h1>
 
 <p>
-    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← Назад к страницам</a>
+    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← К списку страниц</a>
     &nbsp;|&nbsp;
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
+    <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">Редактировать страницу</a>
+</p>
+
+<p>
+    <a href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">+ Добавить блок</a>
+    &nbsp;|&nbsp;
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
 </p>
 
 <?php if (!empty($errors)): ?>
@@ -138,64 +98,37 @@ $APPLICATION->SetTitle($pageId > 0 ? "Редактирование страни�
     </div>
 <?php endif; ?>
 
-<form method="post">
-    <?= bitrix_sessid_post() ?>
+<?php if (empty($blocks)): ?>
+    <p>Блоков пока нет (будет показан UF_CONTENT страницы).</p>
+<?php else: ?>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr>
+            <th>ID</th>
+            <th>TYPE</th>
+            <th>Заголовок</th>
+            <th>SORT</th>
+            <th>Активен</th>
+            <th>Действия</th>
+        </tr>
 
-    <div style="margin-top:10px;">
-        <label>Заголовок:</label><br>
-        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
-    </div>
-
-    <div style="margin-top:10px;">
-        <label>SLUG (часть URL):</label><br>
-        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" style="width: 240px;">
-        <small>латиница/цифры/ - _ (например: about)</small>
-    </div>
-
-    <div style="margin-top:10px;">
-        <label>Сортировка:</label><br>
-        <input type="number" name="SORT" value="<?= (int)$sortValue ?>" style="width: 120px;">
-    </div>
-
-    <div style="margin-top:10px;">
-        <label>Активна:</label>
-        <select name="ACTIVE">
-            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
-            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
-        </select>
-    </div>
-
-    <div style="margin-top:12px;">
-        <label>Контент (HTML):</label><br>
-
-        <?php
-        if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
-            \CFileMan::AddHTMLEditorFrame(
-                "CONTENT",
-                $contentValue,
-                "CONTENT_TYPE",
-                "html",
-                ["height" => 320, "width" => "100%"],
-                "N",
-                0,
-                "",
-                "",
-                false,
-                true,
-                true
-            );
-        } else {
-            ?>
-            <textarea name="CONTENT" style="width:100%; height:320px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
-            <?php
-        }
-        ?>
-    </div>
-
-    <div style="margin-top:15px;">
-        <button type="submit"><?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?></button>
-    </div>
-</form>
-
-<?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+        <?php foreach ($blocks as $b): ?>
+            <tr>
+                <td><?= (int)$b['ID'] ?></td>
+                <td><?= htmlspecialcharsbx((string)$b['UF_TYPE']) ?></td>
+                <td><?= htmlspecialcharsbx((string)$b['UF_TITLE']) ?></td>
+                <td><?= (int)$b['UF_SORT'] ?></td>
+                <td><?= ($b['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
+                <td>
+                    <a href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>&block_id=<?= (int)$b['ID'] ?>">Редактировать</a>
+                    |
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Удалить блок?');">
+                        <?= bitrix_sessid_post() ?>
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="block_id" value="<?= (int)$b['ID'] ?>">
+                        <button type="submit">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+    </tab
+::contentReference[oaicite:0]{index=0}
