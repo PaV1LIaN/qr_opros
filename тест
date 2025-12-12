@@ -2,6 +2,7 @@
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 
 use Bitrix\Main\Context;
+use Bitrix\Main\Loader;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
@@ -9,6 +10,7 @@ global $USER;
 
 $request = Context::getCurrent()->getRequest();
 $code = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
 
 if ($code === '') {
     ShowError("Не указан code");
@@ -38,72 +40,130 @@ if (!in_array($role, ['ADMIN','DEVELOPER'], true) && !$USER->IsAdmin()) {
     exit;
 }
 
-// Убедимся, что есть дефолтные страницы
-$service->ensureDefaultPages((int)$site['ID']);
+$errors = [];
+$page = $pageId > 0 ? $service->getPageById($pageId) : null;
+if ($page && (int)$page['UF_SITE'] !== (int)$site['ID']) {
+    $page = null;
+    $pageId = 0;
+    $errors[] = 'Страница не принадлежит этому сайту';
+}
 
-// POST: удалить страницу
 if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $pageId = (int)$request->getPost('page_id');
+    $title = (string)$request->getPost('TITLE');
+    $slug  = (string)$request->getPost('SLUG');
+    $sort  = (int)$request->getPost('SORT');
+    $active = $request->getPost('ACTIVE') === 'Y';
+
+    // CONTENT может прийти из html-редактора или textarea
+    $content = (string)$request->getPost('CONTENT');
 
     try {
-        if ($action === 'delete') {
-            $service->deletePage($pageId, (int)$site['ID']);
+        if ($pageId > 0) {
+            $service->updatePage($pageId, (int)$site['ID'], [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
+        } else {
+            $service->addPage((int)$site['ID'], [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
         }
+
         LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
     } catch (\Throwable $e) {
-        echo '<div style="color:red;">' . htmlspecialcharsbx($e->getMessage()) . '</div>';
+        $errors[] = $e->getMessage();
     }
 }
 
-$pages = $service->getPagesForSite((int)$site['ID'], false);
+// значения для формы
+$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
+$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
+$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
+$activeValue = ($_POST['ACTIVE'] ?? ($page ? ($page['UF_ACTIVE'] ? 'Y' : 'N') : 'Y'));
+$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
 
-$APPLICATION->SetTitle("Страницы сайта: " . (string)$site['UF_NAME']);
+$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
 ?>
 
-<h1>Страницы: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+<h1><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы (<?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>)</h1>
 
 <p>
-    <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>">+ Добавить страницу</a>
-    &nbsp;|&nbsp;
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
+    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← Назад к страницам</a>
 </p>
 
-<?php if (empty($pages)): ?>
-    <p>Страниц пока нет.</p>
-<?php else: ?>
-    <table border="1" cellpadding="6" cellspacing="0">
-        <tr>
-            <th>ID</th>
-            <th>SLUG</th>
-            <th>Заголовок</th>
-            <th>Сортировка</th>
-            <th>Активна</th>
-            <th>Действия</th>
-        </tr>
-
-        <?php foreach ($pages as $p): ?>
-            <tr>
-                <td><?= (int)$p['ID'] ?></td>
-                <td><?= htmlspecialcharsbx((string)$p['UF_SLUG']) ?></td>
-                <td><?= htmlspecialcharsbx((string)$p['UF_TITLE']) ?></td>
-                <td><?= (int)$p['UF_SORT'] ?></td>
-                <td><?= ($p['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
-                <td>
-                    <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Редактировать</a>
-                    |
-                    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$p['UF_SLUG']) ?>" target="_blank">Открыть</a>
-                    |
-                    <form method="post" style="display:inline;" onsubmit="return confirm('Удалить страницу?');">
-                        <?= bitrix_sessid_post() ?>
-                        <input type="hidden" name="action" value="delete">
-                        <input type="hidden" name="page_id" value="<?= (int)$p['ID'] ?>">
-                        <button type="submit">Удалить</button>
-                    </form>
-                </td>
-            </tr>
+<?php if (!empty($errors)): ?>
+    <div style="color:red;">
+        <?php foreach ($errors as $e): ?>
+            <div><?= htmlspecialcharsbx($e) ?></div>
         <?php endforeach; ?>
-    </table>
+    </div>
 <?php endif; ?>
+
+<form method="post">
+    <?= bitrix_sessid_post() ?>
+
+    <div style="margin-top:10px;">
+        <label>Заголовок:</label><br>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>SLUG (часть URL):</label><br>
+        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" style="width: 240px;">
+        <small>латиница/цифры/ - _ (например: about)</small>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Сортировка:</label><br>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>" style="width: 120px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Активна:</label>
+        <select name="ACTIVE">
+            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+    </div>
+
+    <div style="margin-top:12px;">
+        <label>Контент (HTML):</label><br>
+
+        <?php
+        // Если доступен fileman — покажем нормальный HTML-редактор, иначе textarea
+        if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+            \CFileMan::AddHTMLEditorFrame(
+                "CONTENT",
+                $contentValue,
+                "CONTENT_TYPE",
+                "html",
+                ["height" => 300, "width" => "100%"],
+                "N",
+                0,
+                "",
+                "",
+                false,
+                true,
+                true
+            );
+        } else {
+            ?>
+            <textarea name="CONTENT" style="width:100%; height:300px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
+            <?php
+        }
+        ?>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit"><?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?></button>
+    </div>
+</form>
 
 <?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
