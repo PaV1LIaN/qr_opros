@@ -1,6 +1,6 @@
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Админка типовых сайтов");
+$APPLICATION->SetTitle("Доступы к сайту");
 
 global $USER;
 if (!$USER->IsAdmin()) {
@@ -9,81 +9,143 @@ if (!$USER->IsAdmin()) {
     exit;
 }
 
+\Bitrix\Main\UI\Extension::load("ui.entity-selector");
+
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 $service = new \Cc10\SiteService();
 
-// действия (POST)
 $request = \Bitrix\Main\Context::getCurrent()->getRequest();
+$siteId = (int)$request->getQuery('site_id');
+if ($siteId <= 0) {
+    ShowError("Не указан site_id");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$site = $service->getSiteById($siteId);
+if (!$site) {
+    ShowError("Сайт не найден");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$errors = [];
 if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $siteId = (int)$request->getPost('site_id');
+    // получаем массивы VIEWERS[] / ADMINS[]
+    $viewers = array_unique(array_filter(array_map('intval', (array)$request->getPost('VIEWERS'))));
+    $admins  = array_unique(array_filter(array_map('intval', (array)$request->getPost('ADMINS'))));
 
     try {
-        if ($action === 'disable') {
-            $service->setActive($siteId, false);
-        } elseif ($action === 'enable') {
-            $service->setActive($siteId, true);
-        } elseif ($action === 'delete') {
-            $service->deleteSite($siteId);
-        }
+        $service->setSiteAccess($siteId, $viewers, $admins);
         LocalRedirect('/local/typical_sites/admin.php');
     } catch (\Throwable $e) {
-        echo '<div style="color:red;">' . htmlspecialcharsbx($e->getMessage()) . '</div>';
+        $errors[] = $e->getMessage();
     }
 }
 
-$sites = $service->getAllSites();
+// текущие права
+$access = $service->getAccessForSite($siteId);
+$viewersInit = [];
+$adminsInit = [];
+
+foreach ($access as $row) {
+    if ($row['UF_ROLE'] === 'VIEWER') $viewersInit[] = (int)$row['UF_USER'];
+    if ($row['UF_ROLE'] === 'ADMIN')  $adminsInit[]  = (int)$row['UF_USER'];
+}
 ?>
 
-<h1>Администрирование типовых сайтов</h1>
+<h1>Доступы: <?= htmlspecialcharsbx($site['UF_NAME']) ?> (ID <?= (int)$siteId ?>)</h1>
 
-<p>
-    <a href="/local/typical_sites/manage.php">Создать новый сайт</a>
-</p>
-
-<?php if (empty($sites)): ?>
-    <p>Сайтов пока нет.</p>
-<?php else: ?>
-    <table border="1" cellpadding="6" cellspacing="0">
-        <tr>
-            <th>ID</th>
-            <th>Название</th>
-            <th>CODE</th>
-            <th>URL</th>
-            <th>Активен</th>
-            <th>Действия</th>
-        </tr>
-
-        <?php foreach ($sites as $s): ?>
-            <tr>
-                <td><?= (int)$s['ID'] ?></td>
-                <td><?= htmlspecialcharsbx($s['UF_NAME']) ?></td>
-                <td><?= htmlspecialcharsbx($s['UF_CODE']) ?></td>
-                <td><a href="<?= htmlspecialcharsbx($s['UF_FOLDER']) ?>" target="_blank"><?= htmlspecialcharsbx($s['UF_FOLDER']) ?></a></td>
-                <td><?= ($s['UF_ACTIVE'] ? 'Y' : 'N') ?></td>
-                <td>
-                    <a href="/local/typical_sites/access.php?site_id=<?= (int)$s['ID'] ?>">Доступы</a>
-
-                    <form method="post" style="display:inline;">
-                        <?= bitrix_sessid_post() ?>
-                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
-                        <?php if ($s['UF_ACTIVE']): ?>
-                            <button type="submit" name="action" value="disable">Выключить</button>
-                        <?php else: ?>
-                            <button type="submit" name="action" value="enable">Включить</button>
-                        <?php endif; ?>
-                    </form>
-
-                    <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
-                        <?= bitrix_sessid_post() ?>
-                        <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
-                        <button type="submit" name="action" value="delete">Удалить</button>
-                    </form>
-                </td>
-            </tr>
+<?php if (!empty($errors)): ?>
+    <div style="color:red;">
+        <?php foreach ($errors as $e): ?>
+            <div><?= htmlspecialcharsbx($e) ?></div>
         <?php endforeach; ?>
-    </table>
+    </div>
 <?php endif; ?>
+
+<form method="post" id="ts-access-form">
+    <?= bitrix_sessid_post() ?>
+
+    <div style="margin-top:10px;">
+        <label>VIEWERS:</label><br>
+        <div id="ts-viewers"></div>
+        <div id="ts-viewers-inputs"></div>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>ADMINS:</label><br>
+        <div id="ts-admins"></div>
+        <div id="ts-admins-inputs"></div>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit">Сохранить доступы</button>
+        <a href="/local/typical_sites/admin.php" style="margin-left:10px;">Назад</a>
+    </div>
+</form>
+
+<script>
+BX.ready(function () {
+  function renderHidden(selector, inputsId, name) {
+    const box = document.getElementById(inputsId);
+    box.innerHTML = "";
+    selector.getTags().forEach(tag => {
+      if (tag.getEntityId && tag.getEntityId() === "user") {
+        const id = parseInt(tag.getId(), 10);
+        if (!id) return;
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name + "[]";
+        input.value = id;
+        box.appendChild(input);
+      }
+    });
+  }
+
+  function make(renderId, inputsId, name, context, initIds) {
+    const selector = new BX.UI.EntitySelector.TagSelector({
+      id: renderId,
+      multiple: true,
+      dialogOptions: {
+        context: context,
+        entities: [{ id: "user" }],
+        multiple: true,
+        enableSearch: true
+      },
+      events: {
+        onAfterTagAdd: () => renderHidden(selector, inputsId, name),
+        onAfterTagRemove: () => renderHidden(selector, inputsId, name),
+      }
+    });
+
+    selector.renderTo(document.getElementById(renderId));
+
+    // preselect
+    (initIds || []).forEach(id => {
+      selector.addTag({
+        id: String(id),
+        entityId: "user",
+        title: "user#" + id
+      });
+    });
+
+    renderHidden(selector, inputsId, name);
+    return selector;
+  }
+
+  const viewersInit = <?= json_encode($viewersInit) ?>;
+  const adminsInit  = <?= json_encode($adminsInit) ?>;
+
+  const viewersSel = make("ts-viewers", "ts-viewers-inputs", "VIEWERS", "TYPICAL_SITES_VIEWERS_EDIT", viewersInit);
+  const adminsSel  = make("ts-admins",  "ts-admins-inputs",  "ADMINS",  "TYPICAL_SITES_ADMINS_EDIT", adminsInit);
+
+  document.getElementById("ts-access-form").addEventListener("submit", function () {
+    renderHidden(viewersSel, "ts-viewers-inputs", "VIEWERS");
+    renderHidden(adminsSel,  "ts-admins-inputs",  "ADMINS");
+  });
+});
+</script>
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
