@@ -1,116 +1,210 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 global $USER;
-$request = Context::getCurrent()->getRequest();
+$APPLICATION->SetTitle("Типовой сайт");
 
-$code = trim((string)$request->getQuery('code'));
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
+
 if ($code === '') {
-    ShowError("Не указан code");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    ShowError("Код сайта не указан.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 if (!$USER->IsAuthorized()) {
-    ShowError("Требуется авторизация");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 $service = new \Cc10\SiteService();
+
+// Сайт (только активный)
 $site = $service->getSiteByCode($code);
 if (!$site) {
-    ShowError("Сайт не найден или не активен");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
+// Доступ
 $role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
-if (!in_array($role, ['ADMIN','DEVELOPER'], true) && !$USER->IsAdmin()) {
-    ShowError("Нет прав на настройки сайта");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-$errors = [];
+/**
+ * 1) ПРИОРИТЕТ: файловая реализация сайта
+ * Если есть /local/typical_sites/sites/<code>/index.php — рендерим его.
+ */
+$siteFolder = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+$fileIndex = $siteFolder . 'index.php';
 
-$pages = $service->getPagesForSite((int)$site['ID'], true);
+if (file_exists($fileIndex)) {
+    // Можно передать переменные в файловый шаблон:
+    $TS_SITE = $site;
+    $TS_ROLE = $role;
 
-if ($request->isPost() && check_bitrix_sessid()) {
-    $name = (string)$request->getPost('NAME');
-    $home = (string)$request->getPost('HOME_SLUG');
-    $active = $request->getPost('ACTIVE') === 'Y';
+    include $fileIndex;
 
-    try {
-        $service->updateSiteSettings((int)$site['ID'], [
-            'NAME' => $name,
-            'HOME_SLUG' => $home,
-            'ACTIVE' => $active,
-        ]);
-
-        LocalRedirect('/local/typical_sites/site.php?code=' . urlencode($code));
-    } catch (\Throwable $e) {
-        $errors[] = $e->getMessage();
-    }
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-$nameValue = $_POST['NAME'] ?? (string)$site['UF_NAME'];
-$homeValue = $_POST['HOME_SLUG'] ?? (string)($site['UF_HOME_SLUG'] ?? '');
-$activeValue = $_POST['ACTIVE'] ?? ($site['UF_ACTIVE'] ? 'Y' : 'N');
+/**
+ * 2) ИНАЧЕ: HL-страницы SitePages + блоки SitePageBlocks
+ */
+try {
+    // дефолтные страницы (если ещё нет ни одной)
+    $service->ensureDefaultPages((int)$site['ID']);
 
-$APPLICATION->SetTitle("Настройки сайта");
-?>
+    // меню страниц
+    $pages = $service->getPagesForSite((int)$site['ID']);
 
-<h1>Настройки: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+    // текущая страница
+    $pageSlug = trim((string)$request->getQuery('page'));
+    if ($pageSlug === '') {
+        $home = trim((string)($site['UF_HOME_SLUG'] ?? ''));
+        $pageSlug = ($home !== '') ? $home : 'index';
+    }
 
-<p>
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>">← Назад к сайту</a>
-</p>
+    $page = $service->getPageBySlug((int)$site['ID'], $pageSlug);
 
-<?php if (!empty($errors)): ?>
-    <div style="color:red;">
-        <?php foreach ($errors as $e): ?>
-            <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+    // fallback на первую страницу
+    if (!$page && !empty($pages)) {
+        $page = $pages[0];
+        $pageSlug = (string)$page['UF_SLUG'];
+    }
 
-<form method="post">
-    <?= bitrix_sessid_post() ?>
+    // блоки страницы
+    $blocks = [];
+    if ($page) {
+        $blocks = $service->getBlocksForPage((int)$site['ID'], (int)$page['ID'], true);
+    }
+} catch (\Throwable $e) {
+    ShowError("Ошибка загрузки страниц/блоков: " . $e->getMessage());
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
 
-    <div style="margin-top:10px;">
-        <label>Название сайта:</label><br>
-        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($nameValue) ?>" style="width:480px;">
-    </div>
+// Заголовок сайта
+echo '<h1>' . htmlspecialcharsbx((string)$site['UF_NAME']) . '</h1>';
 
-    <div style="margin-top:10px;">
-        <label>Главная страница (HOME_SLUG):</label><br>
-        <select name="HOME_SLUG">
-            <option value="">(по умолчанию: index)</option>
-            <?php foreach ($pages as $p): ?>
-                <?php $slug = (string)$p['UF_SLUG']; ?>
-                <option value="<?= htmlspecialcharsbx($slug) ?>" <?= ($homeValue === $slug ? 'selected' : '') ?>>
-                    <?= htmlspecialcharsbx((string)$p['UF_TITLE']) ?> (<?= htmlspecialcharsbx($slug) ?>)
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
+// Меню страниц
+if (!empty($pages)) {
+    echo '<nav style="margin:10px 0; padding:10px; border:1px solid #ddd;">';
 
-    <div style="margin-top:10px;">
-        <label>Активен:</label>
-        <select name="ACTIVE">
-            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
-            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
-        </select>
-    </div>
+    foreach ($pages as $p) {
+        $slug  = (string)$p['UF_SLUG'];
+        $title = (string)$p['UF_TITLE'];
 
-    <div style="margin-top:15px;">
-        <button type="submit">Сохранить</button>
-    </div>
-</form>
+        $url = '/local/typical_sites/site.php?code=' . urlencode((string)$site['UF_CODE']) . '&page=' . urlencode($slug);
 
-<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
+        $style = ($slug === $pageSlug)
+            ? 'font-weight:bold; text-decoration:underline; margin-right:12px;'
+            : 'margin-right:12px;';
+
+        echo '<a style="' . $style . '" href="' . htmlspecialcharsbx($url) . '">'
+            . htmlspecialcharsbx($title)
+            . '</a>';
+    }
+
+    echo '</nav>';
+}
+
+// Панель редактирования для ADMIN/DEVELOPER (и глобального админа)
+if (in_array($role, ['ADMIN', 'DEVELOPER'], true) || $USER->IsAdmin()) {
+    $pagesUrl = '/local/typical_sites/pages.php?code=' . urlencode((string)$site['UF_CODE']);
+
+    $blocksUrl = '';
+    if (!empty($page) && !empty($page['ID'])) {
+        $blocksUrl = '/local/typical_sites/blocks.php?code=' . urlencode((string)$site['UF_CODE'])
+            . '&page_id=' . (int)$page['ID'];
+    }
+
+    $settingsUrl = '/local/typical_sites/settings.php?code=' . urlencode((string)$site['UF_CODE']);
+
+    echo '<div style="margin:10px 0; padding:10px; background:#f7f7f7; border:1px solid #ddd;">';
+    echo '<strong>Редактирование:</strong> ';
+    echo '<a href="' . htmlspecialcharsbx($pagesUrl) . '">Страницы</a>';
+
+    if ($blocksUrl !== '') {
+        echo ' | <a href="' . htmlspecialcharsbx($blocksUrl) . '">Блоки этой страницы</a>';
+    }
+
+    echo ' | <a href="' . htmlspecialcharsbx($settingsUrl) . '">Настройки</a>';
+
+    echo '</div>';
+}
+
+// Контент страницы
+if ($page) {
+    echo '<h2>' . htmlspecialcharsbx((string)$page['UF_TITLE']) . '</h2>';
+
+    // Если есть блоки — рендерим блоки, иначе fallback на UF_CONTENT
+    if (!empty($blocks)) {
+        foreach ($blocks as $b) {
+            $type = (string)$b['UF_TYPE'];
+            $title = trim((string)$b['UF_TITLE']);
+            $settings = $service->decodeSettings((string)$b['UF_SETTINGS']);
+
+            echo '<div style="margin:12px 0; padding:12px; border:1px solid #eee;">';
+
+            if ($title !== '') {
+                echo '<h3>' . htmlspecialcharsbx($title) . '</h3>';
+            }
+
+            if ($type === 'TEXT') {
+                echo (string)($settings['html'] ?? '');
+
+            } elseif ($type === 'IFRAME') {
+                $url = trim((string)($settings['url'] ?? ''));
+                $height = (int)($settings['height'] ?? 600);
+                if ($height <= 200) $height = 600;
+
+                if ($url !== '') {
+                    echo '<iframe src="' . htmlspecialcharsbx($url) . '" style="width:100%; height:' . $height . 'px; border:0;" loading="lazy"></iframe>';
+                    echo '<div style="margin-top:8px;">
+                            <a href="' . htmlspecialcharsbx($url) . '" target="_blank" rel="noopener">Открыть в новой вкладке</a>
+                          </div>';
+                } else {
+                    echo '<p>Не задан URL для iframe-блока.</p>';
+                }
+
+            } elseif ($type === 'LINK') {
+                $url = trim((string)($settings['url'] ?? ''));
+                $label = trim((string)($settings['label'] ?? 'Открыть'));
+                if ($label === '') $label = 'Открыть';
+
+                if ($url !== '') {
+                    echo '<a href="' . htmlspecialcharsbx($url) . '" target="_blank" rel="noopener"
+                             style="display:inline-block; padding:10px 14px; border:1px solid #ccc; text-decoration:none;">
+                             ' . htmlspecialcharsbx($label) . '
+                          </a>';
+                } else {
+                    echo '<p>Не задан URL для LINK-блока.</p>';
+                }
+
+            } else {
+                echo '<p>Неизвестный тип блока: ' . htmlspecialcharsbx($type) . '</p>';
+            }
+
+            echo '</div>';
+        }
+    } else {
+        echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . (string)$page['UF_CONTENT'] . '</div>';
+    }
+
+} else {
+    echo '<p>Страницы не найдены.</p>';
+}
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
