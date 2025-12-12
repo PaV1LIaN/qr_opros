@@ -1,4 +1,201 @@
-$service->logAction((int)$site['ID'], (int)$USER->GetID(), 'PAGE_CREATE', 'page', (int)$newPageId, [
-    'title' => $title,
-    'slug' => $slug,
-]);
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+
+use Bitrix\Main\Context;
+use Bitrix\Main\Loader;
+
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+global $USER, $APPLICATION;
+
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
+
+if ($code === '') {
+    ShowError("Не указан code");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$siteId = (int)$site['ID'];
+$role = $service->getUserRole((int)$USER->GetID(), $siteId);
+
+// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
+    ShowError("Нет прав на редактирование страниц");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$errors = [];
+$page = null;
+
+if ($pageId > 0) {
+    $page = $service->getPageById($pageId);
+    if (!$page) {
+        $errors[] = "Страница не найдена";
+        $pageId = 0;
+    } elseif ((int)$page['UF_SITE'] !== $siteId) {
+        $errors[] = "Страница не принадлежит этому сайту";
+        $page = null;
+        $pageId = 0;
+    }
+}
+
+if ($request->isPost() && check_bitrix_sessid()) {
+    $title = (string)$request->getPost('TITLE');
+    $slug  = (string)$request->getPost('SLUG');
+    $sort  = (int)$request->getPost('SORT');
+    $active = ($request->getPost('ACTIVE') === 'Y');
+
+    // CONTENT может прийти из html-редактора или textarea
+    $content = (string)$request->getPost('CONTENT');
+
+    try {
+        if ($pageId > 0) {
+            $service->updatePage($pageId, $siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
+
+            // Audit
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+
+        } else {
+            $newPageId = $service->addPage($siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
+
+            // Audit
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+        }
+
+        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
+    } catch (\Throwable $e) {
+        $errors[] = $e->getMessage();
+    }
+}
+
+// значения для формы (учитываем POST при ошибке)
+$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
+$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
+$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
+$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
+if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
+    $activeValue = 'N';
+}
+$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
+
+$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
+?>
+
+<h1><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы (<?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>)</h1>
+
+<p>
+    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← Назад к страницам</a>
+    &nbsp;|&nbsp;
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
+</p>
+
+<?php if (!empty($errors)): ?>
+    <div style="color:red; margin:10px 0;">
+        <?php foreach ($errors as $e): ?>
+            <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
+
+<form method="post">
+    <?= bitrix_sessid_post() ?>
+
+    <div style="margin-top:10px;">
+        <label>Заголовок:</label><br>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>SLUG (часть URL):</label><br>
+        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" style="width: 240px;">
+        <small>латиница/цифры/ - _ (например: about)</small>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Сортировка:</label><br>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>" style="width: 120px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Активна:</label>
+        <select name="ACTIVE">
+            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+    </div>
+
+    <div style="margin-top:12px;">
+        <label>Контент (HTML):</label><br>
+
+        <?php
+        if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+            \CFileMan::AddHTMLEditorFrame(
+                "CONTENT",
+                $contentValue,
+                "CONTENT_TYPE",
+                "html",
+                ["height" => 320, "width" => "100%"],
+                "N",
+                0,
+                "",
+                "",
+                false,
+                true,
+                true
+            );
+        } else {
+            ?>
+            <textarea name="CONTENT" style="width:100%; height:320px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
+            <?php
+        }
+        ?>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit"><?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?></button>
+    </div>
+</form>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
