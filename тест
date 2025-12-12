@@ -1,3 +1,9 @@
+<?php
+if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+
+\Bitrix\Main\UI\Extension::load("ui.entity-selector");
+?>
+
 <?php if (!empty($arResult['ERRORS'])): ?>
     <div style="color:red;">
         <?php foreach ($arResult['ERRORS'] as $error): ?>
@@ -14,23 +20,100 @@
         <input type="text" name="NAME" value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>">
     </div>
 
-    <div style="margin-top:5px;">
+    <div style="margin-top:10px;">
         <label>Код сайта (URL):</label><br>
         <input type="text" name="CODE" value="<?= htmlspecialcharsbx($_POST['CODE'] ?? '') ?>">
         <small>Например: training-portal</small>
     </div>
 
-    <div style="margin-top:5px;">
-        <label>VIEWERS (ID пользователей):</label><br>
-        <input type="text" name="VIEWERS[]" placeholder="ID пользователя">
-    </div>
-
-    <div style="margin-top:5px;">
-        <label>ADMINS (ID пользователей):</label><br>
-        <input type="text" name="ADMINS[]" placeholder="ID пользователя">
+    <div style="margin-top:10px;">
+        <label>Пользователи (VIEWERS):</label><br>
+        <div id="ts-viewers-selector"></div>
+        <div id="ts-viewers-inputs"></div>
+        <small>Выбери пользователей, которые смогут заходить на сайт.</small>
     </div>
 
     <div style="margin-top:10px;">
+        <label>Администраторы сайта (ADMINS):</label><br>
+        <div id="ts-admins-selector"></div>
+        <div id="ts-admins-inputs"></div>
+        <small>Выбери тех, кто сможет править сайт.</small>
+    </div>
+
+    <div style="margin-top:15px;">
         <button type="submit">Создать сайт</button>
     </div>
 </form>
+
+<script>
+(function () {
+  function mountSelector(containerId, inputsId, inputName) {
+    const inputsContainer = document.getElementById(inputsId);
+
+    function renderInputs(ids) {
+      inputsContainer.innerHTML = "";
+      ids.forEach(id => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = inputName + "[]";
+        input.value = id;
+        inputsContainer.appendChild(input);
+      });
+    }
+
+    const selectedIds = [];
+
+    const selector = new BX.UI.EntitySelector.TagSelector({
+      id: containerId,
+      dialogOptions: {
+        context: containerId,
+        entities: [
+          { id: "user" }
+        ],
+        multiple: true
+      },
+      events: {
+        onTagAdd: (event) => {
+          const item = event.getData().tag.getDialogItem();
+          if (!item) return;
+
+          const entityId = item.getEntityId(); // "user"
+          const id = item.getId();
+
+          if (entityId === "user") {
+            const numericId = parseInt(id, 10);
+            if (!selectedIds.includes(numericId)) {
+              selectedIds.push(numericId);
+              renderInputs(selectedIds);
+            }
+          }
+        },
+        onTagRemove: (event) => {
+          const item = event.getData().tag.getDialogItem();
+          if (!item) return;
+
+          const entityId = item.getEntityId();
+          const id = item.getId();
+
+          if (entityId === "user") {
+            const numericId = parseInt(id, 10);
+            const idx = selectedIds.indexOf(numericId);
+            if (idx >= 0) {
+              selectedIds.splice(idx, 1);
+              renderInputs(selectedIds);
+            }
+          }
+        }
+      }
+    });
+
+    selector.renderTo(document.getElementById(containerId));
+
+    // init empty hidden inputs (на всякий)
+    renderInputs(selectedIds);
+  }
+
+  mountSelector("ts-viewers-selector", "ts-viewers-inputs", "VIEWERS");
+  mountSelector("ts-admins-selector", "ts-admins-inputs", "ADMINS");
+})();
+</script>
