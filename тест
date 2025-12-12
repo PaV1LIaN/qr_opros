@@ -5,7 +5,7 @@ use Bitrix\Main\Context;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-global $USER;
+global $USER, $APPLICATION;
 $request = Context::getCurrent()->getRequest();
 
 $code = trim((string)$request->getQuery('code'));
@@ -40,14 +40,94 @@ if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
 
 $APPLICATION->SetTitle("Логи: " . (string)$site['UF_NAME']);
 
+// фильтр по action
+$action = strtoupper(trim((string)$request->getQuery('action')));
+
+// пагинация
 $page = max(1, (int)$request->getQuery('p'));
 $limit = 50;
 $offset = ($page - 1) * $limit;
 
-$total = $service->getAuditCountForSite($siteId);
-$rows = $service->getAuditForSite($siteId, $limit, $offset);
+// --- Получаем записи логов с фильтром (напрямую через HL class, чтобы не переделывать сервис) ---
+$auditClass = $service->getEntityClass('SiteAuditLog');
+
+$filter = ['=UF_SITE' => $siteId];
+if ($action !== '') {
+    $filter['=UF_ACTION'] = $action;
+}
+
+// total
+$totalRow = $auditClass::getList([
+    'filter' => $filter,
+    'select' => ['CNT'],
+    'runtime' => [
+        new \Bitrix\Main\Entity\ExpressionField('CNT', 'COUNT(1)')
+    ],
+])->fetch();
+$total = (int)($totalRow['CNT'] ?? 0);
+
+// rows
+$res = $auditClass::getList([
+    'filter' => $filter,
+    'select' => ['ID','UF_SITE','UF_USER','UF_ACTION','UF_ENTITY','UF_ENTITY_ID','UF_DATA','UF_CREATED_AT'],
+    'order' => ['UF_CREATED_AT' => 'DESC', 'ID' => 'DESC'],
+    'limit' => $limit,
+    'offset' => $offset,
+]);
+
+$rows = [];
+$userIds = [];
+$actionsSet = [];
+
+while ($r = $res->fetch()) {
+    $rows[] = $r;
+    $uid = (int)($r['UF_USER'] ?? 0);
+    if ($uid > 0) $userIds[$uid] = true;
+    $a = (string)($r['UF_ACTION'] ?? '');
+    if ($a !== '') $actionsSet[$a] = true;
+}
+
+// Подтянем список action для выпадашки (без пагинации, чтобы был полный список)
+// Можно оптимизировать позже, сейчас — просто и стабильно.
+$actionsAll = [];
+$actionsRes = $auditClass::getList([
+    'filter' => ['=UF_SITE' => $siteId],
+    'select' => ['UF_ACTION'],
+    'order' => ['UF_ACTION' => 'ASC'],
+]);
+while ($ar = $actionsRes->fetch()) {
+    $a = (string)($ar['UF_ACTION'] ?? '');
+    if ($a !== '') $actionsAll[$a] = true;
+}
+$actionsAll = array_keys($actionsAll);
+sort($actionsAll);
+
+// Получаем ФИО пользователей одним запросом
+$userMap = [];
+if (!empty($userIds)) {
+    $ids = array_keys($userIds);
+    $rsUsers = \CUser::GetList(
+        ($by = "id"),
+        ($order = "asc"),
+        ['ID' => implode('|', $ids)],
+        ['FIELDS' => ['ID','NAME','LAST_NAME','SECOND_NAME','LOGIN','EMAIL']]
+    );
+    while ($u = $rsUsers->Fetch()) {
+        $full = trim(($u['LAST_NAME'] ?? '') . ' ' . ($u['NAME'] ?? '') . ' ' . ($u['SECOND_NAME'] ?? ''));
+        if ($full === '') $full = (string)($u['LOGIN'] ?? ('user#'.$u['ID']));
+        $userMap[(int)$u['ID']] = $full;
+    }
+}
 
 $totalPages = max(1, (int)ceil($total / $limit));
+
+function ts_build_url(string $code, int $p, string $action): string {
+    $url = '/local/typical_sites/audit.php?code=' . urlencode($code) . '&p=' . $p;
+    if ($action !== '') {
+        $url .= '&action=' . urlencode($action);
+    }
+    return $url;
+}
 ?>
 
 <h1>Логи: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
@@ -56,16 +136,30 @@ $totalPages = max(1, (int)ceil($total / $limit));
     <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>">← Назад к сайту</a>
 </p>
 
+<form method="get" style="margin:10px 0; padding:10px; border:1px solid #ddd;">
+    <input type="hidden" name="code" value="<?= htmlspecialcharsbx($code) ?>">
+    <label>Фильтр по ACTION:</label>
+    <select name="action">
+        <option value="">(все)</option>
+        <?php foreach ($actionsAll as $a): ?>
+            <option value="<?= htmlspecialcharsbx($a) ?>" <?= ($action === $a ? 'selected' : '') ?>>
+                <?= htmlspecialcharsbx($a) ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+    <button type="submit">Применить</button>
+</form>
+
 <p>Всего записей: <?= (int)$total ?></p>
 
 <?php if (empty($rows)): ?>
-    <p>Логов пока нет.</p>
+    <p>Логов пока нет (или не найдено по фильтру).</p>
 <?php else: ?>
     <table border="1" cellpadding="6" cellspacing="0" style="width:100%;">
         <tr>
             <th>ID</th>
             <th>Когда</th>
-            <th>User</th>
+            <th>Кто</th>
             <th>Action</th>
             <th>Entity</th>
             <th>Entity ID</th>
@@ -74,22 +168,23 @@ $totalPages = max(1, (int)ceil($total / $limit));
 
         <?php foreach ($rows as $r): ?>
             <?php
+            $uid = (int)($r['UF_USER'] ?? 0);
+            $who = $uid > 0 ? ($userMap[$uid] ?? ('user#' . $uid)) : '-';
+
             $data = (string)($r['UF_DATA'] ?? '');
             $dataShort = $data;
-            if (mb_strlen($dataShort) > 300) {
-                $dataShort = mb_substr($dataShort, 0, 300) . '...';
+            if (mb_strlen($dataShort) > 400) {
+                $dataShort = mb_substr($dataShort, 0, 400) . '...';
             }
             ?>
             <tr>
                 <td><?= (int)$r['ID'] ?></td>
                 <td><?= htmlspecialcharsbx((string)$r['UF_CREATED_AT']) ?></td>
-                <td><?= (int)$r['UF_USER'] ?></td>
+                <td><?= htmlspecialcharsbx($who) ?></td>
                 <td><?= htmlspecialcharsbx((string)$r['UF_ACTION']) ?></td>
                 <td><?= htmlspecialcharsbx((string)$r['UF_ENTITY']) ?></td>
                 <td><?= (int)$r['UF_ENTITY_ID'] ?></td>
-                <td>
-                    <pre style="white-space:pre-wrap; margin:0;"><?= htmlspecialcharsbx($dataShort) ?></pre>
-                </td>
+                <td><pre style="white-space:pre-wrap; margin:0;"><?= htmlspecialcharsbx($dataShort) ?></pre></td>
             </tr>
         <?php endforeach; ?>
     </table>
@@ -97,9 +192,7 @@ $totalPages = max(1, (int)ceil($total / $limit));
     <?php if ($totalPages > 1): ?>
         <div style="margin-top:12px;">
             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                <?php
-                $url = '/local/typical_sites/audit.php?code=' . urlencode($code) . '&p=' . $i;
-                ?>
+                <?php $url = ts_build_url($code, $i, $action); ?>
                 <?php if ($i === $page): ?>
                     <strong style="margin-right:8px;"><?= $i ?></strong>
                 <?php else: ?>
