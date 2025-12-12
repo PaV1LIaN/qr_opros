@@ -1,50 +1,5 @@
-public function logAction(int $siteId, int $userId, string $action, string $entity, int $entityId = 0, array $data = []): void
-{
-    $auditClass = $this->auditClass;
-
-    $payload = json_encode($data, JSON_UNESCAPED_UNICODE);
-
-    $auditClass::add([
-        'UF_SITE' => $siteId,
-        'UF_USER' => $userId,
-        'UF_ACTION' => strtoupper($action),
-        'UF_ENTITY' => strtolower($entity),
-        'UF_ENTITY_ID' => (int)$entityId,
-        'UF_DATA' => $payload,
-        'UF_CREATED_AT' => new \Bitrix\Main\Type\DateTime(),
-    ]);
-}
-
-public function getAuditCountForSite(int $siteId): int
-{
-    $auditClass = $this->auditClass;
-
-    $row = $auditClass::getList([
-        'filter' => ['=UF_SITE' => $siteId],
-        'select' => ['CNT'],
-        'runtime' => [
-            new \Bitrix\Main\Entity\ExpressionField('CNT', 'COUNT(1)')
-        ],
-    ])->fetch();
-
-    return (int)($row['CNT'] ?? 0);
-}
-
-public function getAuditForSite(int $siteId, int $limit = 50, int $offset = 0): array
-{
-    $auditClass = $this->auditClass;
-
-    $res = $auditClass::getList([
-        'filter' => ['=UF_SITE' => $siteId],
-        'select' => ['ID','UF_SITE','UF_USER','UF_ACTION','UF_ENTITY','UF_ENTITY_ID','UF_DATA','UF_CREATED_AT'],
-        'order' => ['UF_CREATED_AT' => 'DESC', 'ID' => 'DESC'],
-        'limit' => $limit,
-        'offset' => $offset,
-    ]);
-
-    $rows = [];
-    while ($row = $res->fetch()) {
-        $rows[] = $row;
-    }
-    return $rows;
-}
+$service->logAction($siteId, (int)$USER->GetID(), 'ACCESS_UPDATE', 'access', 0, [
+    'viewers' => $viewers,
+    'admins' => $admins,
+    'developers' => $devs,
+]);
