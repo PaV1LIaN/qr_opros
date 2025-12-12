@@ -130,5 +130,8 @@ $APPLICATION->SetTitle("Блоки страницы");
                 </td>
             </tr>
         <?php endforeach; ?>
-    </tab
-::contentReference[oaicite:0]{index=0}
+    </table>
+<?php endif; ?>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
