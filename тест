@@ -1,13 +1,4 @@
-<?php
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
+PHP OK
+Checking: /var/www/html/bx-site/local/typical_sites/lib/SiteService.php
 
-echo "PHP OK<br>";
-
-$path = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
-echo "Checking: " . htmlspecialchars($path) . "<br>";
-
-require_once $path;
-
-echo "SiteService loaded OK<br>";
+Fatal error: Cannot redeclare Cc10\SiteService::getAllSites() in /var/www/html/bx-site/local/typical_sites/lib/SiteService.php on line 304
