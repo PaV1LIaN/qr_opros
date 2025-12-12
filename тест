@@ -1,116 +1,201 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+public function getPagesForSite(int $siteId, bool $onlyActive = true): array
+{
+    $pagesClass = $this->pagesClass;
 
-use Bitrix\Main\Context;
-
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
-
-global $USER;
-$APPLICATION->SetTitle("Типовой сайт");
-
-$request = Context::getCurrent()->getRequest();
-$code = trim((string)$request->getQuery("code"));
-
-if ($code === '') {
-    ShowError("Код сайта не указан.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-if (!$USER->IsAuthorized()) {
-    ShowError("Требуется авторизация.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$service = new \Cc10\SiteService();
-
-$site = $service->getSiteByCode($code);
-if (!$site) {
-    ShowError("Сайт не найден или не активен.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
-if (!$role) {
-    ShowError("У вас нет доступа к этому сайту.");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-/**
- * 1) ПРИОРИТЕТ: файловая реализация сайта
- * Если есть /local/typical_sites/sites/<code>/index.php — рендерим его.
- */
-$siteFolder = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
-$fileIndex = $siteFolder . 'index.php';
-
-if (file_exists($fileIndex)) {
-    // Можно передать переменные в файловый шаблон:
-    $TS_SITE = $site;
-    $TS_ROLE = $role;
-
-    include $fileIndex;
-
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-/**
- * 2) ИНАЧЕ: HL-страницы SitePages
- */
-try {
-    $service->ensureDefaultPages((int)$site['ID']);
-
-    $pages = $service->getPagesForSite((int)$site['ID']);
-
-    $pageSlug = trim((string)$request->getQuery('page'));
-    if ($pageSlug === '') {
-        $pageSlug = 'index';
+    $filter = ['=UF_SITE' => $siteId];
+    if ($onlyActive) {
+        $filter['=UF_ACTIVE'] = true;
     }
 
-    $page = $service->getPageBySlug((int)$site['ID'], $pageSlug);
+    $res = $pagesClass::getList([
+        'filter' => $filter,
+        'select' => ['ID','UF_SLUG','UF_TITLE','UF_CONTENT','UF_SORT','UF_ACTIVE'],
+        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
+    ]);
 
-    if (!$page && !empty($pages)) {
-        $page = $pages[0];
-        $pageSlug = (string)$page['UF_SLUG'];
+    $pages = [];
+    while ($row = $res->fetch()) {
+        $pages[] = $row;
     }
-} catch (\Throwable $e) {
-    ShowError("Ошибка загрузки страниц: " . $e->getMessage());
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
+    return $pages;
 }
 
-// Вывод HL-страниц
-echo '<h1>' . htmlspecialcharsbx((string)$site['UF_NAME']) . '</h1>';
+public function getPageById(int $pageId): ?array
+{
+    $pagesClass = $this->pagesClass;
 
-if (!empty($pages)) {
-    echo '<nav style="margin:10px 0; padding:10px; border:1px solid #ddd;">';
+    if ($pageId <= 0) return null;
 
-    foreach ($pages as $p) {
-        $slug  = (string)$p['UF_SLUG'];
-        $title = (string)$p['UF_TITLE'];
+    $row = $pagesClass::getList([
+        'filter' => ['=ID' => $pageId],
+        'select' => ['*'],
+        'limit' => 1,
+    ])->fetch();
 
-        $url = '/local/typical_sites/site.php?code=' . urlencode((string)$site['UF_CODE']) . '&page=' . urlencode($slug);
+    return $row ?: null;
+}
 
-        $style = ($slug === $pageSlug)
-            ? 'font-weight:bold; text-decoration:underline; margin-right:12px;'
-            : 'margin-right:12px;';
+public function getPageBySlug(int $siteId, string $slug): ?array
+{
+    $pagesClass = $this->pagesClass;
 
-        echo '<a style="' . $style . '" href="' . htmlspecialcharsbx($url) . '">'
-            . htmlspecialcharsbx($title)
-            . '</a>';
+    $slug = $this->normalizeSlug($slug);
+
+    $row = $pagesClass::getList([
+        'filter' => [
+            '=UF_SITE' => $siteId,
+            '=UF_SLUG' => $slug,
+            '=UF_ACTIVE' => true,
+        ],
+        'select' => ['*'],
+        'limit' => 1,
+    ])->fetch();
+
+    return $row ?: null;
+}
+
+public function addPage(int $siteId, array $data): int
+{
+    $pagesClass = $this->pagesClass;
+
+    $slug  = $this->normalizeSlug((string)($data['SLUG'] ?? 'index'));
+    $title = trim((string)($data['TITLE'] ?? ''));
+    $html  = (string)($data['CONTENT'] ?? '');
+    $sort  = (int)($data['SORT'] ?? 100);
+    $active = (bool)($data['ACTIVE'] ?? true);
+
+    if ($title === '') {
+        throw new \InvalidArgumentException('Пустой заголовок страницы');
     }
 
-    echo '</nav>';
+    // slug должен быть уникален в рамках сайта
+    $exists = $pagesClass::getList([
+        'filter' => ['=UF_SITE' => $siteId, '=UF_SLUG' => $slug],
+        'select' => ['ID'],
+        'limit' => 1,
+    ])->fetch();
+    if ($exists) {
+        throw new \RuntimeException('SLUG уже занят в этом сайте');
+    }
+
+    $res = $pagesClass::add([
+        'UF_SITE' => $siteId,
+        'UF_SLUG' => $slug,
+        'UF_TITLE' => $title,
+        'UF_CONTENT' => $html,
+        'UF_SORT' => $sort,
+        'UF_ACTIVE' => $active,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось создать страницу: ' . implode(', ', $res->getErrorMessages()));
+    }
+
+    return (int)$res->getId();
 }
 
-if ($page) {
-    echo '<h2>' . htmlspecialcharsbx((string)$page['UF_TITLE']) . '</h2>';
-    echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . (string)$page['UF_CONTENT'] . '</div>';
-} else {
-    echo '<p>Страницы не найдены.</p>';
+public function updatePage(int $pageId, int $siteId, array $data): void
+{
+    $pagesClass = $this->pagesClass;
+
+    $page = $this->getPageById($pageId);
+    if (!$page) {
+        throw new \RuntimeException('Страница не найдена');
+    }
+    if ((int)$page['UF_SITE'] !== $siteId) {
+        throw new \RuntimeException('Страница не принадлежит сайту');
+    }
+
+    $slug  = $this->normalizeSlug((string)($data['SLUG'] ?? $page['UF_SLUG']));
+    $title = trim((string)($data['TITLE'] ?? $page['UF_TITLE']));
+    $html  = (string)($data['CONTENT'] ?? $page['UF_CONTENT']);
+    $sort  = (int)($data['SORT'] ?? $page['UF_SORT']);
+    $active = (bool)($data['ACTIVE'] ?? $page['UF_ACTIVE']);
+
+    if ($title === '') {
+        throw new \InvalidArgumentException('Пустой заголовок страницы');
+    }
+
+    // уникальность slug в рамках сайта (кроме текущей страницы)
+    $exists = $pagesClass::getList([
+        'filter' => ['=UF_SITE' => $siteId, '=UF_SLUG' => $slug, '!=ID' => $pageId],
+        'select' => ['ID'],
+        'limit' => 1,
+    ])->fetch();
+    if ($exists) {
+        throw new \RuntimeException('SLUG уже занят в этом сайте');
+    }
+
+    $res = $pagesClass::update($pageId, [
+        'UF_SLUG' => $slug,
+        'UF_TITLE' => $title,
+        'UF_CONTENT' => $html,
+        'UF_SORT' => $sort,
+        'UF_ACTIVE' => $active,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось обновить страницу: ' . implode(', ', $res->getErrorMessages()));
+    }
 }
 
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+public function deletePage(int $pageId, int $siteId): void
+{
+    $pagesClass = $this->pagesClass;
+
+    $page = $this->getPageById($pageId);
+    if (!$page) return;
+
+    if ((int)$page['UF_SITE'] !== $siteId) {
+        throw new \RuntimeException('Страница не принадлежит сайту');
+    }
+
+    $res = $pagesClass::delete($pageId);
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось удалить страницу: ' . implode(', ', $res->getErrorMessages()));
+    }
+}
+
+public function ensureDefaultPages(int $siteId): void
+{
+    $pagesClass = $this->pagesClass;
+
+    $exists = $pagesClass::getList([
+        'filter' => ['=UF_SITE' => $siteId],
+        'select' => ['ID'],
+        'limit' => 1,
+    ])->fetch();
+
+    if ($exists) return;
+
+    $pagesClass::add([
+        'UF_SITE' => $siteId,
+        'UF_SLUG' => 'index',
+        'UF_TITLE' => 'Главная',
+        'UF_CONTENT' => '<p>Добро пожаловать!</p>',
+        'UF_SORT' => 100,
+        'UF_ACTIVE' => true,
+    ]);
+
+    $pagesClass::add([
+        'UF_SITE' => $siteId,
+        'UF_SLUG' => 'contacts',
+        'UF_TITLE' => 'Контакты',
+        'UF_CONTENT' => '<p>Контакты компании</p>',
+        'UF_SORT' => 200,
+        'UF_ACTIVE' => true,
+    ]);
+}
+
+protected function normalizeSlug(string $slug): string
+{
+    $slug = trim($slug);
+    if ($slug === '') $slug = 'index';
+
+    // только латиница/цифры/ - _
+    if (!preg_match('~^[a-z0-9\-_]+$~i', $slug)) {
+        throw new \InvalidArgumentException('SLUG может содержать только латиницу, цифры, - и _');
+    }
+
+    return strtolower($slug);
+}
