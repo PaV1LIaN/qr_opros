@@ -1,28 +1,116 @@
-public function updateSiteSettings(int $siteId, array $data): void
-{
-    $sitesClass = $this->sitesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 
-    $fields = [];
+use Bitrix\Main\Context;
 
-    if (array_key_exists('NAME', $data)) {
-        $name = trim((string)$data['NAME']);
-        if ($name === '') throw new \InvalidArgumentException('Пустое имя сайта');
-        $fields['UF_NAME'] = $name;
-    }
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-    if (array_key_exists('HOME_SLUG', $data)) {
-        $home = trim((string)$data['HOME_SLUG']);
-        $fields['UF_HOME_SLUG'] = $home;
-    }
+global $USER;
+$request = Context::getCurrent()->getRequest();
 
-    if (array_key_exists('ACTIVE', $data)) {
-        $fields['UF_ACTIVE'] = (bool)$data['ACTIVE'];
-    }
+$code = trim((string)$request->getQuery('code'));
+if ($code === '') {
+    ShowError("Не указан code");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
 
-    if (!$fields) return;
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
 
-    $res = $sitesClass::update($siteId, $fields);
-    if (!$res->isSuccess()) {
-        throw new \RuntimeException('Не удалось сохранить настройки сайта: ' . implode(', ', $res->getErrorMessages()));
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+if (!$site) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+if (!in_array($role, ['ADMIN','DEVELOPER'], true) && !$USER->IsAdmin()) {
+    ShowError("Нет прав на настройки сайта");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
+}
+
+$errors = [];
+
+$pages = $service->getPagesForSite((int)$site['ID'], true);
+
+if ($request->isPost() && check_bitrix_sessid()) {
+    $name = (string)$request->getPost('NAME');
+    $home = (string)$request->getPost('HOME_SLUG');
+    $active = $request->getPost('ACTIVE') === 'Y';
+
+    try {
+        $service->updateSiteSettings((int)$site['ID'], [
+            'NAME' => $name,
+            'HOME_SLUG' => $home,
+            'ACTIVE' => $active,
+        ]);
+
+        LocalRedirect('/local/typical_sites/site.php?code=' . urlencode($code));
+    } catch (\Throwable $e) {
+        $errors[] = $e->getMessage();
     }
 }
+
+$nameValue = $_POST['NAME'] ?? (string)$site['UF_NAME'];
+$homeValue = $_POST['HOME_SLUG'] ?? (string)($site['UF_HOME_SLUG'] ?? '');
+$activeValue = $_POST['ACTIVE'] ?? ($site['UF_ACTIVE'] ? 'Y' : 'N');
+
+$APPLICATION->SetTitle("Настройки сайта");
+?>
+
+<h1>Настройки: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+
+<p>
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>">← Назад к сайту</a>
+</p>
+
+<?php if (!empty($errors)): ?>
+    <div style="color:red;">
+        <?php foreach ($errors as $e): ?>
+            <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
+
+<form method="post">
+    <?= bitrix_sessid_post() ?>
+
+    <div style="margin-top:10px;">
+        <label>Название сайта:</label><br>
+        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($nameValue) ?>" style="width:480px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Главная страница (HOME_SLUG):</label><br>
+        <select name="HOME_SLUG">
+            <option value="">(по умолчанию: index)</option>
+            <?php foreach ($pages as $p): ?>
+                <?php $slug = (string)$p['UF_SLUG']; ?>
+                <option value="<?= htmlspecialcharsbx($slug) ?>" <?= ($homeValue === $slug ? 'selected' : '') ?>>
+                    <?= htmlspecialcharsbx((string)$p['UF_TITLE']) ?> (<?= htmlspecialcharsbx($slug) ?>)
+                </option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Активен:</label>
+        <select name="ACTIVE">
+            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit">Сохранить</button>
+    </div>
+</form>
+
+<?php require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php"); ?>
