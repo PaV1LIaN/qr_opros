@@ -1,373 +1,70 @@
-<?php
-
-namespace Cc10;
-
-use Bitrix\Main\Loader;
-use Bitrix\Highloadblock\HighloadBlockTable as HL;
-use Bitrix\Main\Type\DateTime;
-
-class SiteService
+public function getPagesForSite(int $siteId): array
 {
-    protected string $sitesClass;
-    protected string $accessClass;
+    $pagesClass = $this->pagesClass;
 
-    public function __construct()
-    {
-        if (!Loader::includeModule('highloadblock')) {
-            throw new \RuntimeException('Модуль highloadblock не установлен');
-        }
+    $res = $pagesClass::getList([
+        'filter' => [
+            '=UF_SITE' => $siteId,
+            '=UF_ACTIVE' => true,
+        ],
+        'select' => ['ID','UF_SLUG','UF_TITLE','UF_CONTENT','UF_SORT'],
+        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
+    ]);
 
-        $this->sitesClass  = $this->getEntityClass('Sites');
-        $this->accessClass = $this->getEntityClass('SiteUserAccess');
+    $pages = [];
+    while ($row = $res->fetch()) {
+        $pages[] = $row;
     }
+    return $pages;
+}
 
-    /**
-     * Получить DataClass HL-блока по его NAME
-     */
-    protected function getEntityClass(string $hlName): string
-    {
-        $hlblock = HL::getList([
-            'filter' => ['=NAME' => $hlName],
-            'limit'  => 1,
-        ])->fetch();
+public function getPageBySlug(int $siteId, string $slug): ?array
+{
+    $pagesClass = $this->pagesClass;
 
-        if (!$hlblock) {
-            throw new \RuntimeException("HL-блок {$hlName} не найден");
-        }
+    $slug = trim($slug);
+    if ($slug === '') $slug = 'index';
 
-        $entity    = HL::compileEntity($hlblock);
-        $dataClass = $entity->getDataClass();
+    $row = $pagesClass::getList([
+        'filter' => [
+            '=UF_SITE' => $siteId,
+            '=UF_SLUG' => $slug,
+            '=UF_ACTIVE' => true,
+        ],
+        'select' => ['*'],
+        'limit' => 1,
+    ])->fetch();
 
-        return $dataClass;
-    }
+    return $row ?: null;
+}
 
-    /**
-     * Сайты, доступные пользователю (VIEWER / ADMIN / DEVELOPER)
-     */
-    public function getSitesForUser(int $userId): array
-    {
-        $accessClass = $this->accessClass;
-        $sitesClass  = $this->sitesClass;
+public function ensureDefaultPages(int $siteId): void
+{
+    $pagesClass = $this->pagesClass;
 
-        $accessRows = $accessClass::getList([
-            'filter' => [
-                '=UF_USER' => $userId,
-                '=UF_ROLE' => ['VIEWER', 'ADMIN', 'DEVELOPER'],
-            ],
-            'select' => ['UF_SITE'],
-        ])->fetchAll();
+    // если уже есть страницы — ничего не делаем
+    $exists = $pagesClass::getList([
+        'filter' => ['=UF_SITE' => $siteId],
+        'select' => ['ID'],
+        'limit' => 1,
+    ])->fetch();
+    if ($exists) return;
 
-        if (empty($accessRows)) {
-            return [];
-        }
+    $pagesClass::add([
+        'UF_SITE' => $siteId,
+        'UF_SLUG' => 'index',
+        'UF_TITLE' => 'Главная',
+        'UF_CONTENT' => '<p>Добро пожаловать!</p>',
+        'UF_SORT' => 100,
+        'UF_ACTIVE' => true,
+    ]);
 
-        $siteIds = array_values(array_unique(array_map('intval', array_column($accessRows, 'UF_SITE'))));
-        if (empty($siteIds)) {
-            return [];
-        }
-
-        $res = $sitesClass::getList([
-            'filter' => [
-                '=ID'        => $siteIds,
-                '=UF_ACTIVE' => true,
-            ],
-            'select' => [
-                'ID',
-                'UF_NAME',
-                'UF_CODE',
-                'UF_FOLDER',
-                'UF_TEMPLATE_CODE',
-                'UF_ACTIVE',
-            ],
-            'order'  => ['UF_NAME' => 'ASC'],
-        ]);
-
-        $sites = [];
-        while ($row = $res->fetch()) {
-            $sites[] = $row;
-        }
-
-        return $sites;
-    }
-
-    /**
-     * Получить сайт по CODE (только активные)
-     */
-    public function getSiteByCode(string $code): ?array
-    {
-        $sitesClass = $this->sitesClass;
-
-        $code = trim($code);
-        if ($code === '') {
-            return null;
-        }
-
-        $row = $sitesClass::getList([
-            'filter' => [
-                '=UF_CODE'   => $code,
-                '=UF_ACTIVE' => true,
-            ],
-            'select' => ['*'],
-            'limit'  => 1,
-        ])->fetch();
-
-        return $row ?: null;
-    }
-
-    /**
-     * Получить сайт по ID (любой, даже неактивный)
-     */
-    public function getSiteById(int $id): ?array
-    {
-        $sitesClass = $this->sitesClass;
-
-        if ($id <= 0) {
-            return null;
-        }
-
-        $row = $sitesClass::getList([
-            'filter' => ['=ID' => $id],
-            'select' => ['*'],
-            'limit'  => 1,
-        ])->fetch();
-
-        return $row ?: null;
-    }
-
-    /**
-     * Роль пользователя на сайте
-     */
-    public function getUserRole(int $userId, int $siteId): ?string
-    {
-        $accessClass = $this->accessClass;
-
-        if ($userId <= 0 || $siteId <= 0) {
-            return null;
-        }
-
-        $row = $accessClass::getList([
-            'filter' => [
-                '=UF_USER' => $userId,
-                '=UF_SITE' => $siteId,
-            ],
-            'select' => ['UF_ROLE'],
-            'limit'  => 1,
-        ])->fetch();
-
-        return $row['UF_ROLE'] ?? null;
-    }
-
-    /**
-     * Создать сайт. Возвращает ID записи HL Sites.
-     * UF_FOLDER = /local/typical_sites/site.php?code=<code>
-     */
-    public function createSite(array $data, int $creatorId): int
-    {
-        $sitesClass = $this->sitesClass;
-
-        $name = trim((string)($data['NAME'] ?? ''));
-        $code = trim((string)($data['CODE'] ?? ''));
-
-        if ($name === '') {
-            throw new \InvalidArgumentException('Пустое NAME сайта');
-        }
-        if ($code === '') {
-            throw new \InvalidArgumentException('Пустой CODE сайта');
-        }
-
-        // URL просмотра без urlrewrite
-        $folderUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
-
-        $res = $sitesClass::add([
-            'UF_CODE'          => $code,
-            'UF_NAME'          => $name,
-            'UF_FOLDER'        => $folderUrl,
-            'UF_TEMPLATE_CODE' => $data['TEMPLATE_CODE'] ?? null,
-            'UF_ACTIVE'        => true,
-            'UF_CREATED_BY'    => $creatorId,
-            'UF_CREATED_AT'    => new DateTime(),
-        ]);
-
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException(
-                'Не удалось создать сайт: ' . implode(', ', $res->getErrorMessages())
-            );
-        }
-
-        return (int)$res->getId();
-    }
-
-    /**
-     * Обновить сайт по ID (NAME/CODE).
-     * При смене CODE автоматически обновляем UF_FOLDER.
-     */
-    public function updateSite(int $id, array $data): void
-    {
-        $sitesClass = $this->sitesClass;
-
-        if ($id <= 0) {
-            throw new \InvalidArgumentException('Некорректный ID сайта');
-        }
-
-        $fields = [];
-
-        if (array_key_exists('NAME', $data)) {
-            $name = trim((string)$data['NAME']);
-            if ($name === '') {
-                throw new \InvalidArgumentException('Пустое NAME сайта');
-            }
-            $fields['UF_NAME'] = $name;
-        }
-
-        if (array_key_exists('CODE', $data)) {
-            $code = trim((string)$data['CODE']);
-            if ($code === '') {
-                throw new \InvalidArgumentException('Пустой CODE сайта');
-            }
-            $fields['UF_CODE']   = $code;
-            $fields['UF_FOLDER'] = '/local/typical_sites/site.php?code=' . urlencode($code);
-        }
-
-        if (empty($fields)) {
-            return;
-        }
-
-        $res = $sitesClass::update($id, $fields);
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException(
-                'Не удалось обновить сайт: ' . implode(', ', $res->getErrorMessages())
-            );
-        }
-    }
-
-    /**
-     * Перезаписать доступы: удаляет старые и добавляет новые.
-     */
-    public function setSiteAccess(int $siteId, array $viewers, array $admins, array $developers = []): void
-    {
-        $accessClass = $this->accessClass;
-
-        if ($siteId <= 0) {
-            throw new \InvalidArgumentException('Некорректный siteId');
-        }
-
-        // Удаляем старые доступы
-        $old = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID'],
-        ]);
-        while ($row = $old->fetch()) {
-            $accessClass::delete((int)$row['ID']);
-        }
-
-        $insertRole = function (array $userIds, string $role) use ($accessClass, $siteId) {
-            $userIds = array_unique(array_filter(array_map('intval', $userIds)));
-            foreach ($userIds as $userId) {
-                if ($userId <= 0) {
-                    continue;
-                }
-                $accessClass::add([
-                    'UF_SITE' => $siteId,
-                    'UF_USER' => $userId,
-                    'UF_ROLE' => $role,
-                ]);
-            }
-        };
-
-        $insertRole($viewers, 'VIEWER');
-        $insertRole($admins, 'ADMIN');
-        $insertRole($developers, 'DEVELOPER');
-    }
-
-    /**
-     * Доступы по сайту (ID, UF_USER, UF_ROLE)
-     */
-    public function getAccessForSite(int $siteId): array
-    {
-        $accessClass = $this->accessClass;
-
-        if ($siteId <= 0) {
-            return [];
-        }
-
-        $res = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID', 'UF_USER', 'UF_ROLE'],
-            'order'  => ['ID' => 'ASC'],
-        ]);
-
-        $rows = [];
-        while ($row = $res->fetch()) {
-            $rows[] = $row;
-        }
-        return $rows;
-    }
-
-    /**
-     * Все сайты (для админа). Возвращает и активные и неактивные.
-     */
-    public function getAllSites(): array
-    {
-        $sitesClass = $this->sitesClass;
-
-        $res = $sitesClass::getList([
-            'select' => ['ID', 'UF_NAME', 'UF_CODE', 'UF_FOLDER', 'UF_ACTIVE', 'UF_CREATED_BY', 'UF_CREATED_AT'],
-            'order'  => ['ID' => 'DESC'],
-        ]);
-
-        $sites = [];
-        while ($row = $res->fetch()) {
-            $sites[] = $row;
-        }
-        return $sites;
-    }
-
-    /**
-     * Включить/выключить сайт
-     */
-    public function setActive(int $siteId, bool $active): void
-    {
-        $sitesClass = $this->sitesClass;
-
-        if ($siteId <= 0) {
-            throw new \InvalidArgumentException('Некорректный ID сайта');
-        }
-
-        $res = $sitesClass::update($siteId, ['UF_ACTIVE' => $active]);
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException(
-                'Не удалось изменить активность: ' . implode(', ', $res->getErrorMessages())
-            );
-        }
-    }
-
-    /**
-     * Удалить сайт: сначала доступы, потом запись Sites
-     */
-    public function deleteSite(int $siteId): void
-    {
-        $sitesClass  = $this->sitesClass;
-        $accessClass = $this->accessClass;
-
-        if ($siteId <= 0) {
-            throw new \InvalidArgumentException('Некорректный ID сайта');
-        }
-
-        // Удаляем доступы
-        $old = $accessClass::getList([
-            'filter' => ['=UF_SITE' => $siteId],
-            'select' => ['ID'],
-        ]);
-        while ($row = $old->fetch()) {
-            $accessClass::delete((int)$row['ID']);
-        }
-
-        // Удаляем сайт
-        $res = $sitesClass::delete($siteId);
-        if (!$res->isSuccess()) {
-            throw new \RuntimeException(
-                'Не удалось удалить сайт: ' . implode(', ', $res->getErrorMessages())
-            );
-        }
-    }
+    $pagesClass::add([
+        'UF_SITE' => $siteId,
+        'UF_SLUG' => 'contacts',
+        'UF_TITLE' => 'Контакты',
+        'UF_CONTENT' => '<p>Контакты компании</p>',
+        'UF_SORT' => 200,
+        'UF_ACTIVE' => true,
+    ]);
 }
