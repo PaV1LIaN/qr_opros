@@ -1,20 +1,13 @@
-// Панель редактирования для ADMIN/DEVELOPER (и глобального админа)
-if (in_array($role, ['ADMIN', 'DEVELOPER'], true) || $USER->IsAdmin()) {
-    $pagesUrl = '/local/typical_sites/pages.php?code=' . urlencode((string)$site['UF_CODE']);
+} elseif ($type === 'IFRAME') {
+    $url = trim((string)($settings['url'] ?? ''));
+    $height = (int)($settings['height'] ?? 600);
+    if ($height <= 200) $height = 600;
 
-    $blocksUrl = '';
-    if (!empty($page) && !empty($page['ID'])) {
-        $blocksUrl = '/local/typical_sites/blocks.php?code=' . urlencode((string)$site['UF_CODE'])
-            . '&page_id=' . (int)$page['ID'];
+    if ($url !== '') {
+        echo '<iframe src="' . htmlspecialcharsbx($url) . '" style="width:100%; height:' . $height . 'px; border:0;" loading="lazy"></iframe>';
+        echo '<div style="margin-top:8px;">
+                <a href="' . htmlspecialcharsbx($url) . '" target="_blank" rel="noopener">Открыть в новой вкладке</a>
+              </div>';
+    } else {
+        echo '<p>Не задан URL для iframe-блока.</p>';
     }
-
-    echo '<div style="margin:10px 0; padding:10px; background:#f7f7f7; border:1px solid #ddd;">';
-    echo '<strong>Редактирование:</strong> ';
-    echo '<a href="' . htmlspecialcharsbx($pagesUrl) . '">Страницы</a>';
-
-    if ($blocksUrl !== '') {
-        echo ' | <a href="' . htmlspecialcharsbx($blocksUrl) . '">Блоки этой страницы</a>';
-    }
-
-    echo '</div>';
-}
