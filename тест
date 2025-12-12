@@ -1,132 +1,165 @@
-public function getBlocksForPage(int $siteId, int $pageId, bool $onlyActive = true): array
-{
-    $blocksClass = $this->blocksClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-    $filter = [
-        '=UF_SITE' => $siteId,
-        '=UF_PAGE' => $pageId,
-    ];
-    if ($onlyActive) {
-        $filter['=UF_ACTIVE'] = true;
-    }
+use Bitrix\Main\Context;
 
-    $res = $blocksClass::getList([
-        'filter' => $filter,
-        'select' => ['ID','UF_TYPE','UF_TITLE','UF_SORT','UF_ACTIVE','UF_SETTINGS'],
-        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
-    ]);
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-    $rows = [];
-    while ($row = $res->fetch()) {
-        $rows[] = $row;
-    }
-    return $rows;
+global $USER;
+$APPLICATION->SetTitle("Типовой сайт");
+
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery("code"));
+
+if ($code === '') {
+    ShowError("Код сайта не указан.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function getBlockById(int $blockId): ?array
-{
-    $blocksClass = $this->blocksClass;
-    if ($blockId <= 0) return null;
-
-    $row = $blocksClass::getList([
-        'filter' => ['=ID' => $blockId],
-        'select' => ['*'],
-        'limit' => 1,
-    ])->fetch();
-
-    return $row ?: null;
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function addBlock(int $siteId, int $pageId, array $data): int
-{
-    $blocksClass = $this->blocksClass;
+$service = new \Cc10\SiteService();
 
-    $type = strtoupper(trim((string)($data['TYPE'] ?? 'TEXT')));
-    if (!in_array($type, ['TEXT','IFRAME'], true)) {
-        throw new \InvalidArgumentException('Неизвестный тип блока');
-    }
-
-    $title = trim((string)($data['TITLE'] ?? ''));
-    $sort = (int)($data['SORT'] ?? 100);
-    $active = (bool)($data['ACTIVE'] ?? true);
-
-    $settings = $data['SETTINGS'] ?? [];
-    $json = json_encode($settings, JSON_UNESCAPED_UNICODE);
-
-    $res = $blocksClass::add([
-        'UF_SITE' => $siteId,
-        'UF_PAGE' => $pageId,
-        'UF_TYPE' => $type,
-        'UF_TITLE' => $title,
-        'UF_SORT' => $sort,
-        'UF_ACTIVE' => $active,
-        'UF_SETTINGS' => $json,
-    ]);
-
-    if (!$res->isSuccess()) {
-        throw new \RuntimeException('Не удалось создать блок: ' . implode(', ', $res->getErrorMessages()));
-    }
-
-    return (int)$res->getId();
+// Сайт (только активный)
+$site = $service->getSiteByCode($code);
+if (!$site) {
+    ShowError("Сайт не найден или не активен.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function updateBlock(int $blockId, int $siteId, int $pageId, array $data): void
-{
-    $blocksClass = $this->blocksClass;
-
-    $block = $this->getBlockById($blockId);
-    if (!$block) throw new \RuntimeException('Блок не найден');
-
-    if ((int)$block['UF_SITE'] !== $siteId || (int)$block['UF_PAGE'] !== $pageId) {
-        throw new \RuntimeException('Блок не принадлежит странице/сайту');
-    }
-
-    $type = strtoupper(trim((string)($data['TYPE'] ?? $block['UF_TYPE'])));
-    if (!in_array($type, ['TEXT','IFRAME'], true)) {
-        throw new \InvalidArgumentException('Неизвестный тип блока');
-    }
-
-    $title = trim((string)($data['TITLE'] ?? $block['UF_TITLE']));
-    $sort = (int)($data['SORT'] ?? $block['UF_SORT']);
-    $active = (bool)($data['ACTIVE'] ?? $block['UF_ACTIVE']);
-
-    $settings = $data['SETTINGS'] ?? $this->decodeSettings((string)$block['UF_SETTINGS']);
-    $json = json_encode($settings, JSON_UNESCAPED_UNICODE);
-
-    $res = $blocksClass::update($blockId, [
-        'UF_TYPE' => $type,
-        'UF_TITLE' => $title,
-        'UF_SORT' => $sort,
-        'UF_ACTIVE' => $active,
-        'UF_SETTINGS' => $json,
-    ]);
-
-    if (!$res->isSuccess()) {
-        throw new \RuntimeException('Не удалось обновить блок: ' . implode(', ', $res->getErrorMessages()));
-    }
+// Доступ
+$role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
+if (!$role) {
+    ShowError("У вас нет доступа к этому сайту.");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function deleteBlock(int $blockId, int $siteId, int $pageId): void
-{
-    $blocksClass = $this->blocksClass;
+/**
+ * 1) ПРИОРИТЕТ: файловая реализация сайта
+ * Если есть /local/typical_sites/sites/<code>/index.php — рендерим его.
+ */
+$siteFolder = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+$fileIndex = $siteFolder . 'index.php';
 
-    $block = $this->getBlockById($blockId);
-    if (!$block) return;
+if (file_exists($fileIndex)) {
+    // Можно передать переменные в файловый шаблон:
+    $TS_SITE = $site;
+    $TS_ROLE = $role;
 
-    if ((int)$block['UF_SITE'] !== $siteId || (int)$block['UF_PAGE'] !== $pageId) {
-        throw new \RuntimeException('Блок не принадлежит странице/сайту');
-    }
+    include $fileIndex;
 
-    $res = $blocksClass::delete($blockId);
-    if (!$res->isSuccess()) {
-        throw new \RuntimeException('Не удалось удалить блок: ' . implode(', ', $res->getErrorMessages()));
-    }
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
 
-public function decodeSettings(string $json): array
-{
-    $json = trim($json);
-    if ($json === '') return [];
-    $data = json_decode($json, true);
-    return is_array($data) ? $data : [];
+/**
+ * 2) ИНАЧЕ: HL-страницы SitePages + блоки SitePageBlocks
+ */
+try {
+    // дефолтные страницы (если ещё нет ни одной)
+    $service->ensureDefaultPages((int)$site['ID']);
+
+    // меню страниц
+    $pages = $service->getPagesForSite((int)$site['ID']);
+
+    // текущая страница
+    $pageSlug = trim((string)$request->getQuery('page'));
+    if ($pageSlug === '') {
+        $pageSlug = 'index';
+    }
+
+    $page = $service->getPageBySlug((int)$site['ID'], $pageSlug);
+
+    // fallback на первую страницу
+    if (!$page && !empty($pages)) {
+        $page = $pages[0];
+        $pageSlug = (string)$page['UF_SLUG'];
+    }
+
+    // блоки страницы
+    $blocks = [];
+    if ($page) {
+        $blocks = $service->getBlocksForPage((int)$site['ID'], (int)$page['ID'], true);
+    }
+} catch (\Throwable $e) {
+    ShowError("Ошибка загрузки страниц/блоков: " . $e->getMessage());
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
+
+// Заголовок сайта
+echo '<h1>' . htmlspecialcharsbx((string)$site['UF_NAME']) . '</h1>';
+
+// Меню страниц
+if (!empty($pages)) {
+    echo '<nav style="margin:10px 0; padding:10px; border:1px solid #ddd;">';
+
+    foreach ($pages as $p) {
+        $slug  = (string)$p['UF_SLUG'];
+        $title = (string)$p['UF_TITLE'];
+
+        $url = '/local/typical_sites/site.php?code=' . urlencode((string)$site['UF_CODE']) . '&page=' . urlencode($slug);
+
+        $style = ($slug === $pageSlug)
+            ? 'font-weight:bold; text-decoration:underline; margin-right:12px;'
+            : 'margin-right:12px;';
+
+        echo '<a style="' . $style . '" href="' . htmlspecialcharsbx($url) . '">'
+            . htmlspecialcharsbx($title)
+            . '</a>';
+    }
+
+    echo '</nav>';
+}
+
+// Контент страницы
+if ($page) {
+    echo '<h2>' . htmlspecialcharsbx((string)$page['UF_TITLE']) . '</h2>';
+
+    // Если есть блоки — рендерим блоки, иначе fallback на UF_CONTENT
+    if (!empty($blocks)) {
+        foreach ($blocks as $b) {
+            $type = (string)$b['UF_TYPE'];
+            $title = trim((string)$b['UF_TITLE']);
+            $settings = $service->decodeSettings((string)$b['UF_SETTINGS']);
+
+            echo '<div style="margin:12px 0; padding:12px; border:1px solid #eee;">';
+
+            if ($title !== '') {
+                echo '<h3>' . htmlspecialcharsbx($title) . '</h3>';
+            }
+
+            if ($type === 'TEXT') {
+                echo (string)($settings['html'] ?? '');
+            } elseif ($type === 'IFRAME') {
+                $url = trim((string)($settings['url'] ?? ''));
+                $height = (int)($settings['height'] ?? 600);
+                if ($height <= 200) $height = 600;
+
+                if ($url !== '') {
+                    echo '<iframe src="' . htmlspecialcharsbx($url) . '" style="width:100%; height:' . $height . 'px; border:0;" loading="lazy"></iframe>';
+                } else {
+                    echo '<p>Не задан URL для iframe-блока.</p>';
+                }
+            } else {
+                echo '<p>Неизвестный тип блока: ' . htmlspecialcharsbx($type) . '</p>';
+            }
+
+            echo '</div>';
+        }
+    } else {
+        echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . (string)$page['UF_CONTENT'] . '</div>';
+    }
+
+} else {
+    echo '<p>Страницы не найдены.</p>';
+}
+
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
