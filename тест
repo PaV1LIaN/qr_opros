@@ -1,106 +1,63 @@
-<?php
-if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) die();
+    public function getAllSites(): array
+    {
+        $sitesClass = $this->sitesClass;
 
-\Bitrix\Main\UI\Extension::load("ui.entity-selector");
-?>
+        $res = $sitesClass::getList([
+            'select' => ['ID', 'UF_NAME', 'UF_CODE', 'UF_FOLDER', 'UF_ACTIVE', 'UF_CREATED_BY', 'UF_CREATED_AT'],
+            'order' => ['ID' => 'DESC'],
+        ]);
 
-<?php if (!empty($arResult['ERRORS'])): ?>
-    <div style="color:red;">
-        <?php foreach ($arResult['ERRORS'] as $error): ?>
-            <div><?= htmlspecialcharsbx($error) ?></div>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+        $sites = [];
+        while ($row = $res->fetch()) {
+            $sites[] = $row;
+        }
+        return $sites;
+    }
 
-<form method="post" id="ts-form">
-    <?= bitrix_sessid_post() ?>
+    public function setActive(int $siteId, bool $active): void
+    {
+        $sitesClass = $this->sitesClass;
 
-    <div>
-        <label>Название сайта:</label><br>
-        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>">
-    </div>
+        $res = $sitesClass::update($siteId, ['UF_ACTIVE' => $active]);
+        if (!$res->isSuccess()) {
+            throw new \RuntimeException('Не удалось изменить активность: ' . implode(', ', $res->getErrorMessages()));
+        }
+    }
 
-    <div style="margin-top:10px;">
-        <label>Код сайта (URL):</label><br>
-        <input type="text" name="CODE" value="<?= htmlspecialcharsbx($_POST['CODE'] ?? '') ?>">
-        <small>Например: training-portal</small>
-    </div>
+    public function deleteSite(int $siteId): void
+    {
+        $sitesClass = $this->sitesClass;
+        $accessClass = $this->accessClass;
 
-    <div style="margin-top:12px;">
-        <label>Пользователи (VIEWERS):</label><br>
-        <div id="ts-viewers"></div>
-        <div id="ts-viewers-inputs"></div>
-    </div>
+        // Сначала удаляем доступы
+        $old = $accessClass::getList([
+            'filter' => ['=UF_SITE' => $siteId],
+            'select' => ['ID'],
+        ]);
+        while ($row = $old->fetch()) {
+            $accessClass::delete((int)$row['ID']);
+        }
 
-    <div style="margin-top:12px;">
-        <label>Администраторы (ADMINS):</label><br>
-        <div id="ts-admins"></div>
-        <div id="ts-admins-inputs"></div>
-    </div>
+        // Потом удаляем сайт
+        $res = $sitesClass::delete($siteId);
+        if (!$res->isSuccess()) {
+            throw new \RuntimeException('Не удалось удалить сайт: ' . implode(', ', $res->getErrorMessages()));
+        }
+    }
 
-    <div style="margin-top:15px;">
-        <button type="submit">Создать сайт</button>
-    </div>
-</form>
+    public function getAccessForSite(int $siteId): array
+    {
+        $accessClass = $this->accessClass;
 
-<script>
-BX.ready(function () {
-  function buildHiddenInputs(selector, inputsContainerId, inputName) {
-    const container = document.getElementById(inputsContainerId);
-    container.innerHTML = "";
+        $res = $accessClass::getList([
+            'filter' => ['=UF_SITE' => $siteId],
+            'select' => ['ID', 'UF_USER', 'UF_ROLE'],
+            'order' => ['ID' => 'ASC'],
+        ]);
 
-    // getTags() — штатный метод TagSelector :contentReference[oaicite:1]{index=1}
-    const tags = selector.getTags();
-
-    tags.forEach(tag => {
-      // TagItem содержит id + entityId (user/department/etc)
-      const entityId = tag.getEntityId ? tag.getEntityId() : null;
-      const rawId = tag.getId ? tag.getId() : null;
-
-      if (entityId !== "user") return;
-
-      const id = parseInt(rawId, 10);
-      if (!id) return;
-
-      const input = document.createElement("input");
-      input.type = "hidden";
-      input.name = inputName + "[]";
-      input.value = id;
-      container.appendChild(input);
-    });
-  }
-
-  function makeSelector(renderNodeId, inputsNodeId, inputName, context) {
-    const selector = new BX.UI.EntitySelector.TagSelector({
-      id: renderNodeId,
-      // multiple по умолчанию true, но оставим явно :contentReference[oaicite:2]{index=2}
-      multiple: true,
-      dialogOptions: {
-        context: context,
-        entities: [{ id: "user" }],
-        // на всякий случай (в разных сборках бывает полезно)
-        multiple: true,
-        enableSearch: true
-      },
-      events: {
-        onAfterTagAdd: () => buildHiddenInputs(selector, inputsNodeId, inputName),
-        onAfterTagRemove: () => buildHiddenInputs(selector, inputsNodeId, inputName),
-      }
-    });
-
-    selector.renderTo(document.getElementById(renderNodeId));
-    buildHiddenInputs(selector, inputsNodeId, inputName);
-
-    return selector;
-  }
-
-  const viewersSelector = makeSelector("ts-viewers", "ts-viewers-inputs", "VIEWERS", "TYPICAL_SITES_VIEWERS");
-  const adminsSelector  = makeSelector("ts-admins",  "ts-admins-inputs",  "ADMINS",  "TYPICAL_SITES_ADMINS");
-
-  // На submit ещё раз синхронизируем hidden-поля
-  document.getElementById("ts-form").addEventListener("submit", function () {
-    buildHiddenInputs(viewersSelector, "ts-viewers-inputs", "VIEWERS");
-    buildHiddenInputs(adminsSelector,  "ts-admins-inputs",  "ADMINS");
-  });
-});
-</script>
+        $rows = [];
+        while ($row = $res->fetch()) {
+            $rows[] = $row;
+        }
+        return $rows;
+    }
