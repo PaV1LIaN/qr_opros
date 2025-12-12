@@ -25,7 +25,6 @@ if (!$USER->IsAuthorized()) {
 
 $service = new \Cc10\SiteService();
 
-// Сайт (только активный)
 $site = $service->getSiteByCode($code);
 if (!$site) {
     ShowError("Сайт не найден или не активен.");
@@ -33,7 +32,6 @@ if (!$site) {
     exit;
 }
 
-// Доступ
 $role = $service->getUserRole((int)$USER->GetID(), (int)$site['ID']);
 if (!$role) {
     ShowError("У вас нет доступа к этому сайту.");
@@ -41,15 +39,32 @@ if (!$role) {
     exit;
 }
 
-// Страницы (HL SitePages)
+/**
+ * 1) ПРИОРИТЕТ: файловая реализация сайта
+ * Если есть /local/typical_sites/sites/<code>/index.php — рендерим его.
+ */
+$siteFolder = $_SERVER["DOCUMENT_ROOT"] . '/local/typical_sites/sites/' . $code . '/';
+$fileIndex = $siteFolder . 'index.php';
+
+if (file_exists($fileIndex)) {
+    // Можно передать переменные в файловый шаблон:
+    $TS_SITE = $site;
+    $TS_ROLE = $role;
+
+    include $fileIndex;
+
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+/**
+ * 2) ИНАЧЕ: HL-страницы SitePages
+ */
 try {
-    // Создаём дефолтные страницы, если их ещё нет
     $service->ensureDefaultPages((int)$site['ID']);
 
-    // Список страниц для меню
     $pages = $service->getPagesForSite((int)$site['ID']);
 
-    // Какая страница открыта
     $pageSlug = trim((string)$request->getQuery('page'));
     if ($pageSlug === '') {
         $pageSlug = 'index';
@@ -57,22 +72,19 @@ try {
 
     $page = $service->getPageBySlug((int)$site['ID'], $pageSlug);
 
-    // fallback на первую страницу
     if (!$page && !empty($pages)) {
         $page = $pages[0];
         $pageSlug = (string)$page['UF_SLUG'];
     }
-
 } catch (\Throwable $e) {
     ShowError("Ошибка загрузки страниц: " . $e->getMessage());
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-// Вывод
+// Вывод HL-страниц
 echo '<h1>' . htmlspecialcharsbx((string)$site['UF_NAME']) . '</h1>';
 
-// Меню
 if (!empty($pages)) {
     echo '<nav style="margin:10px 0; padding:10px; border:1px solid #ddd;">';
 
@@ -94,14 +106,9 @@ if (!empty($pages)) {
     echo '</nav>';
 }
 
-// Контент
 if ($page) {
-    $title = (string)$page['UF_TITLE'];
-    $content = (string)$page['UF_CONTENT'];
-
-    echo '<h2>' . htmlspecialcharsbx($title) . '</h2>';
-    // UF_CONTENT — HTML, поэтому не экранируем
-    echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . $content . '</div>';
+    echo '<h2>' . htmlspecialcharsbx((string)$page['UF_TITLE']) . '</h2>';
+    echo '<div class="ts-content" style="padding:10px; border:1px solid #eee;">' . (string)$page['UF_CONTENT'] . '</div>';
 } else {
     echo '<p>Страницы не найдены.</p>';
 }
