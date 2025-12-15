@@ -3,10 +3,20 @@ require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
 use Bitrix\Main\Loader;
+use Bitrix\Main\UI\Extension;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 global $USER, $APPLICATION;
+
+Extension::load([
+    "ui.buttons",
+    "ui.alerts",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
+
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
 $request = Context::getCurrent()->getRequest();
 
@@ -75,7 +85,6 @@ if ($request->isPost() && check_bitrix_sessid()) {
     $active = ($request->getPost('ACTIVE') === 'Y');
 
     try {
-        // SETTINGS по типу
         if ($type === 'TEXT') {
             $html = (string)$request->getPost('TEXT_HTML');
             $set = ['html' => $html];
@@ -115,7 +124,6 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 'SETTINGS' => $set,
             ]);
 
-            // Audit
             $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_UPDATE', 'block', $blockId, [
                 'page_id' => (int)$page['ID'],
                 'type' => $type,
@@ -133,7 +141,6 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 'SETTINGS' => $set,
             ]);
 
-            // Audit
             $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_CREATE', 'block', $newBlockId, [
                 'page_id' => (int)$page['ID'],
                 'type' => $type,
@@ -166,104 +173,229 @@ $linkUrlValue = $_POST['LINK_URL'] ?? (string)($settings['url'] ?? '');
 $linkLabelValue = $_POST['LINK_LABEL'] ?? (string)($settings['label'] ?? 'Открыть');
 
 $APPLICATION->SetTitle($blockId > 0 ? "Редактирование блока" : "Создание блока");
+
+$backUrl = '/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$page['ID'];
+$openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode((string)$page['UF_SLUG']);
 ?>
 
-<h1><?= ($blockId > 0 ? 'Редактирование' : 'Создание') ?> блока</h1>
+<style>
+/* small extra form styles */
+.ts-formCard{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+.ts-grid2{display:grid;grid-template-columns: 1fr 220px 160px;gap:12px;}
+@media (max-width: 980px){ .ts-grid2{grid-template-columns:1fr;} }
 
-<p>
-    <a href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">← Назад к блокам</a>
-    &nbsp;|&nbsp;
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
-</p>
+.ts-field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:700;}
+.ts-field input[type="text"], .ts-field input[type="number"], .ts-field select{
+  width:100%;
+  height:38px;
+  border:1px solid rgba(31,36,48,.14);
+  background: rgba(255,255,255,.92);
+  border-radius:12px;
+  padding: 0 12px;
+  outline:none;
+}
+.ts-field input:focus, .ts-field select:focus{
+  border-color: rgba(91,124,255,.45);
+  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
+}
 
-<?php if (!empty($errors)): ?>
-    <div style="color:red; margin:10px 0;">
-        <?php foreach ($errors as $e): ?>
-            <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
+.ts-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 10px;}
+.ts-tab{
+  border:1px solid rgba(31,36,48,.14);
+  background: rgba(255,255,255,.9);
+  border-radius:999px;
+  padding:7px 12px;
+  cursor:pointer;
+  font-weight:700;
+  font-size:13px;
+}
+.ts-tab.is-active{
+  border-color: rgba(91,124,255,.55);
+  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
+}
+.ts-section{display:none;}
+.ts-section.is-active{display:block;}
+
+.ts-help{
+  margin-top:8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ts-hr{
+  height:1px;background: rgba(231,233,242,.9);
+  margin:14px 0;
+  border:0;
+}
+</style>
+
+<div class="ts-page">
+
+  <div class="ts-hero">
+    <div class="ts-heroTop">
+      <div>
+        <h1 class="ts-title"><?= ($blockId > 0 ? 'Редактирование' : 'Создание') ?> блока</h1>
+        <div class="ts-sub">
+          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b> ·
+          Страница: <b><?= htmlspecialcharsbx((string)$page['UF_TITLE']) ?></b> ·
+          SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$page['UF_SLUG']) ?></span>
+        </div>
+      </div>
+
+      <div class="ts-actions">
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Назад к блокам</a>
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openPageUrl) ?>" target="_blank">Открыть страницу</a>
+        <button class="ui-btn ts-primary" type="submit" form="ts-block-form">
+          <?= ($blockId > 0 ? 'Сохранить' : 'Создать') ?>
+        </button>
+      </div>
     </div>
-<?php endif; ?>
+  </div>
 
-<form method="post" id="ts-block-form">
+  <?php if (!empty($errors)): ?>
+    <div class="ui-alert ui-alert-danger">
+      <span class="ui-alert-message">
+        <?php foreach ($errors as $e): ?>
+          <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+      </span>
+    </div>
+  <?php endif; ?>
+
+  <form method="post" id="ts-block-form" class="ts-formCard">
     <?= bitrix_sessid_post() ?>
 
-    <div style="margin-top:10px;">
-        <label>TYPE:</label><br>
-        <select name="TYPE">
-            <option value="TEXT" <?= ($typeValue === 'TEXT' ? 'selected' : '') ?>>TEXT</option>
-            <option value="IFRAME" <?= ($typeValue === 'IFRAME' ? 'selected' : '') ?>>IFRAME</option>
-            <option value="LINK" <?= ($typeValue === 'LINK' ? 'selected' : '') ?>>LINK</option>
+    <div class="ts-grid2">
+      <div class="ts-field">
+        <label>Заголовок блока</label>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" placeholder="Например: Баннер, Таблица, iframe…">
+      </div>
+
+      <div class="ts-field">
+        <label>TYPE</label>
+        <select name="TYPE" id="ts-type">
+          <option value="TEXT" <?= ($typeValue === 'TEXT' ? 'selected' : '') ?>>TEXT</option>
+          <option value="IFRAME" <?= ($typeValue === 'IFRAME' ? 'selected' : '') ?>>IFRAME</option>
+          <option value="LINK" <?= ($typeValue === 'LINK' ? 'selected' : '') ?>>LINK</option>
         </select>
+        <div class="ts-help">Тип определяет, какие настройки будут сохранены в UF_SETTINGS.</div>
+      </div>
+
+      <div class="ts-field">
+        <label>Сортировка</label>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>">
+      </div>
     </div>
 
-    <div style="margin-top:10px;">
-        <label>Заголовок блока:</label><br>
-        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
-    </div>
-
-    <div style="margin-top:10px;">
-        <label>Сортировка:</label><br>
-        <input type="number" name="SORT" value="<?= (int)$sortValue ?>" style="width: 120px;">
-    </div>
-
-    <div style="margin-top:10px;">
-        <label>Активен:</label>
+    <div class="ts-grid2" style="grid-template-columns: 220px 1fr 1fr; margin-top:12px;">
+      <div class="ts-field">
+        <label>Активен</label>
         <select name="ACTIVE">
-            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
-            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+          <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+          <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
         </select>
+      </div>
+      <div></div>
+      <div></div>
     </div>
 
-    <hr>
+    <hr class="ts-hr">
 
-    <div style="margin-top:10px;">
-        <h3>Настройки TEXT</h3>
-        <?php
-        if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
-            \CFileMan::AddHTMLEditorFrame(
-                "TEXT_HTML",
-                $textHtmlValue,
-                "TEXT_HTML_TYPE",
-                "html",
-                ["height" => 260, "width" => "100%"],
-                "N"
-            );
-        } else {
-            ?>
-            <textarea name="TEXT_HTML" style="width:100%; height:260px;"><?= htmlspecialcharsbx($textHtmlValue) ?></textarea>
-            <?php
-        }
-        ?>
+    <div class="ts-tabs">
+      <button type="button" class="ts-tab" data-tab="TEXT">TEXT</button>
+      <button type="button" class="ts-tab" data-tab="IFRAME">IFRAME</button>
+      <button type="button" class="ts-tab" data-tab="LINK">LINK</button>
     </div>
 
-    <div style="margin-top:15px;">
-        <h3>Настройки IFRAME</h3>
-        <div>
-            <label>URL:</label><br>
-            <input type="text" name="IFRAME_URL" value="<?= htmlspecialcharsbx($iframeUrlValue) ?>" style="width: 100%;">
-        </div>
-        <div style="margin-top:8px;">
-            <label>Высота (px):</label><br>
-            <input type="number" name="IFRAME_HEIGHT" value="<?= (int)$iframeHeightValue ?>" style="width: 120px;">
-        </div>
+    <div class="ts-section" data-section="TEXT">
+      <div class="ts-help" style="margin-bottom:10px;">HTML контент блока (сохраняется в UF_SETTINGS.html)</div>
+      <?php
+      if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+          \CFileMan::AddHTMLEditorFrame(
+              "TEXT_HTML",
+              $textHtmlValue,
+              "TEXT_HTML_TYPE",
+              "html",
+              ["height" => 280, "width" => "100%"],
+              "N"
+          );
+      } else {
+          ?>
+          <textarea name="TEXT_HTML" style="width:100%; height:280px; border-radius:12px; border:1px solid rgba(31,36,48,.14); padding:10px;"><?= htmlspecialcharsbx($textHtmlValue) ?></textarea>
+          <?php
+      }
+      ?>
     </div>
 
-    <div style="margin-top:15px;">
-        <h3>Настройки LINK</h3>
-        <div>
-            <label>URL:</label><br>
-            <input type="text" name="LINK_URL" value="<?= htmlspecialcharsbx($linkUrlValue) ?>" style="width: 100%;">
-        </div>
-        <div style="margin-top:8px;">
-            <label>Текст кнопки:</label><br>
-            <input type="text" name="LINK_LABEL" value="<?= htmlspecialcharsbx($linkLabelValue) ?>" style="width: 320px;">
-        </div>
+    <div class="ts-section" data-section="IFRAME">
+      <div class="ts-field" style="margin-top:10px;">
+        <label>URL</label>
+        <input type="text" name="IFRAME_URL" value="<?= htmlspecialcharsbx($iframeUrlValue) ?>" placeholder="https://...">
+        <div class="ts-help">Разрешены только http/https. Запрещены javascript:/data:</div>
+      </div>
+
+      <div class="ts-field" style="margin-top:12px; max-width:220px;">
+        <label>Высота (px)</label>
+        <input type="number" name="IFRAME_HEIGHT" value="<?= (int)$iframeHeightValue ?>">
+      </div>
     </div>
 
-    <div style="margin-top:15px;">
-        <button type="submit"><?= ($blockId > 0 ? 'Сохранить' : 'Создать') ?></button>
+    <div class="ts-section" data-section="LINK">
+      <div class="ts-field" style="margin-top:10px;">
+        <label>URL</label>
+        <input type="text" name="LINK_URL" value="<?= htmlspecialcharsbx($linkUrlValue) ?>" placeholder="https://...">
+      </div>
+
+      <div class="ts-field" style="margin-top:12px; max-width:420px;">
+        <label>Текст кнопки</label>
+        <input type="text" name="LINK_LABEL" value="<?= htmlspecialcharsbx($linkLabelValue) ?>">
+      </div>
+
+      <div class="ts-help">Сохраняется в UF_SETTINGS.label</div>
     </div>
-</form>
+
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="ui-btn ts-primary" type="submit">
+        <?= ($blockId > 0 ? 'Сохранить' : 'Создать') ?>
+      </button>
+      <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Отмена</a>
+    </div>
+
+  </form>
+</div>
+
+<script>
+(function(){
+  const typeSelect = document.getElementById('ts-type');
+  const tabs = Array.from(document.querySelectorAll('.ts-tab'));
+  const sections = Array.from(document.querySelectorAll('.ts-section'));
+
+  function setActive(type){
+    tabs.forEach(t => t.classList.toggle('is-active', t.dataset.tab === type));
+    sections.forEach(s => s.classList.toggle('is-active', s.dataset.section === type));
+  }
+
+  tabs.forEach(t => {
+    t.addEventListener('click', () => {
+      const type = t.dataset.tab;
+      if (typeSelect) typeSelect.value = type;
+      setActive(type);
+    });
+  });
+
+  if (typeSelect) {
+    typeSelect.addEventListener('change', () => setActive(typeSelect.value));
+    setActive(typeSelect.value || 'TEXT');
+  } else {
+    setActive('TEXT');
+  }
+})();
+</script>
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
