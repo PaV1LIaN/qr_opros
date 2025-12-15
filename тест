@@ -1,23 +1,24 @@
-public function setPageActive(int $pageId, int $siteId, bool $active): void
-{
-    $pagesClass = $this->pagesClass;
+public function getPagesForSite(int $siteId, bool $onlyActive = true): array
+    {
+        $pagesClass = $this->pagesClass;
 
-    // проверка, что страница принадлежит сайту
-    $row = $pagesClass::getList([
-        'filter' => ['=ID' => $pageId, '=UF_SITE' => $siteId],
-        'select' => ['ID'],
-        'limit' => 1,
-    ])->fetch();
+        $filter = [
+            '=UF_SITE' => $siteId,
+            '=UF_DELETED' => false,
+        ];
+        if ($onlyActive) {
+            $filter['=UF_ACTIVE'] = true;
+        }
 
-    if (!$row) {
-        throw new \RuntimeException('Страница не найдена или не принадлежит этому сайту');
+        $res = $pagesClass::getList([
+            'filter' => $filter,
+            'select' => ['ID','UF_SLUG','UF_TITLE','UF_CONTENT','UF_SORT','UF_ACTIVE'],
+            'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
+        ]);
+
+        $pages = [];
+        while ($row = $res->fetch()) {
+            $pages[] = $row;
+        }
+        return $pages;
     }
-
-    $res = $pagesClass::update($pageId, [
-        'UF_ACTIVE' => $active ? 1 : 0,
-    ]);
-
-    if (!$res->isSuccess()) {
-        throw new \RuntimeException(implode('; ', $res->getErrorMessages()));
-    }
-}
