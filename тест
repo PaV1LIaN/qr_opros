@@ -1,286 +1,68 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-
-use Bitrix\Main\Context;
-use Bitrix\Main\UI\Extension;
-
-global $USER, $APPLICATION;
-
-$APPLICATION->SetTitle("Админка типовых сайтов");
-
-// Подключаем CSS
-$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
-
-// Bitrix UI + popup menu
-Extension::load([
-    "ui.buttons",
-    "ui.alerts",
-    "ui.icons",
-    "ui.fonts.opensans",
-    "main.popup",
-]);
-
-if (!$USER->IsAdmin()) {
-    ShowError("Доступ запрещён");
-    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
-    exit;
+/* --- Buttons upgrade (only inside our admin page) --- */
+.ts-page .ui-btn{
+  border-radius: 12px;
+  height: 38px;
+  line-height: 36px;
+  padding: 0 14px;
+  box-shadow: 0 6px 16px rgba(20, 28, 56, .08);
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+}
+.ts-page .ui-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(20, 28, 56, .12);
+}
+.ts-page .ui-btn:active{
+  transform: translateY(0);
+  box-shadow: 0 6px 14px rgba(20, 28, 56, .10);
 }
 
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
-$service = new \Cc10\SiteService();
+/* Primary gradient button */
+.ts-page .ui-btn.ts-primary{
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border: none;
+  color: #fff;
+}
+.ts-page .ui-btn.ts-primary:hover{ filter: brightness(1.03); }
 
-$request = Context::getCurrent()->getRequest();
-$errors = [];
-
-// действия (POST)
-if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $siteId = (int)$request->getPost('site_id');
-
-    try {
-        if ($action === 'disable') {
-            $service->setActive($siteId, false);
-        } elseif ($action === 'enable') {
-            $service->setActive($siteId, true);
-        } elseif ($action === 'delete') {
-            $service->deleteSite($siteId);
-        }
-        LocalRedirect('/local/typical_sites/admin.php');
-    } catch (\Throwable $e) {
-        $errors[] = $e->getMessage();
-    }
+/* Soft / ghost button */
+.ts-page .ui-btn.ts-ghost{
+  background: rgba(255,255,255,.80);
+  border: 1px solid rgba(31,36,48,.14);
+  color: rgba(31,36,48,.9);
+}
+.ts-page .ui-btn.ts-ghost:hover{
+  background: #fff;
+  border-color: rgba(91,124,255,.28);
 }
 
-$sites = $service->getAllSites();
-$totalCnt = count($sites);
-$activeCnt = 0;
-foreach ($sites as $s) if (!empty($s['UF_ACTIVE'])) $activeCnt++;
-$offCnt = $totalCnt - $activeCnt;
-?>
+/* Subtle action buttons in rows */
+.ts-page .ui-btn.ts-action{
+  background: rgba(255,255,255,.72);
+  border: 1px solid rgba(31,36,48,.12);
+  color: rgba(31,36,48,.92);
+}
+.ts-page .ui-btn.ts-action:hover{
+  background: #fff;
+  border-color: rgba(91,124,255,.28);
+}
 
-<div class="ts-page">
+/* Danger (elegant) */
+.ts-page .ui-btn.ts-danger{
+  background: rgba(239,68,68,.10);
+  border: 1px solid rgba(239,68,68,.22);
+  color: rgba(185, 28, 28, .95);
+  box-shadow: 0 6px 16px rgba(239,68,68,.10);
+}
+.ts-page .ui-btn.ts-danger:hover{
+  background: rgba(239,68,68,.14);
+  border-color: rgba(239,68,68,.30);
+}
 
-  <div class="ts-hero">
-    <div class="ts-heroTop">
-      <div>
-        <h1 class="ts-title">Администрирование типовых сайтов</h1>
-        <div class="ts-sub">Список сайтов, быстрые действия и меню “⋯”.</div>
-      </div>
-
-      <div class="ts-actions">
-        <a class="ui-btn ui-btn-primary ui-btn-icon-add ts-primary" href="/local/typical_sites/manage.php">Создать сайт</a>
-        <a class="ui-btn ui-btn-light-border ts-ghost" href="/local/typical_sites/admin.php">Обновить</a>
-      </div>
-    </div>
-
-    <div class="ts-grid">
-      <div class="ts-stat">
-        <div class="k">Всего сайтов</div>
-        <div class="v"><?= (int)$totalCnt ?></div>
-        <div class="hint">включая выключенные</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Активные</div>
-        <div class="v" style="color:var(--ok);"><?= (int)$activeCnt ?></div>
-        <div class="hint">доступны пользователям</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Выключенные</div>
-        <div class="v" style="color:var(--warn);"><?= (int)$offCnt ?></div>
-        <div class="hint">не показываются / закрыты</div>
-      </div>
-    </div>
-  </div>
-
-  <?php if (!empty($errors)): ?>
-    <div class="ui-alert ui-alert-danger">
-      <span class="ui-alert-message">
-        <?php foreach ($errors as $e): ?>
-          <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
-      </span>
-    </div>
-  <?php endif; ?>
-
-  <div class="ts-toolbar">
-    <input class="ts-input" type="text" id="ts-search" placeholder="Поиск по названию или CODE...">
-    <button type="button" class="ts-chip is-active" data-filter="all">
-      <span class="ts-dot all"></span> Все <b id="ts-total"><?= (int)$totalCnt ?></b>
-    </button>
-    <button type="button" class="ts-chip" data-filter="active">
-      <span class="ts-dot ok"></span> Active <b id="ts-active"><?= (int)$activeCnt ?></b>
-    </button>
-    <button type="button" class="ts-chip" data-filter="off">
-      <span class="ts-dot off"></span> Off <b id="ts-off"><?= (int)$offCnt ?></b>
-    </button>
-    <span class="ts-pill" style="margin-left:auto;">
-      Показано: <b id="ts-count"><?= (int)$totalCnt ?></b>
-    </span>
-  </div>
-
-  <?php if (empty($sites)): ?>
-    <div class="ui-alert ui-alert-warning">
-      <span class="ui-alert-message">Сайтов пока нет.</span>
-    </div>
-  <?php else: ?>
-    <div class="ts-tableWrap">
-      <table class="ts-table">
-        <thead>
-          <tr>
-            <th style="width:70px;">ID</th>
-            <th>Название</th>
-            <th style="width:160px;">CODE</th>
-            <th>URL</th>
-            <th style="width:120px;">Статус</th>
-            <th style="width:340px;">Действия</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($sites as $s): ?>
-            <?php
-              $code = (string)$s['UF_CODE'];
-              $url = '/local/typical_sites/site.php?code=' . urlencode($code);
-              $isActive = !empty($s['UF_ACTIVE']);
-              $searchKey = mb_strtolower(trim((string)$s['UF_NAME'] . ' ' . $code));
-            ?>
-            <tr class="ts-row"
-                data-search="<?= htmlspecialcharsbx($searchKey) ?>"
-                data-status="<?= ($isActive ? 'active' : 'off') ?>">
-              <td><?= (int)$s['ID'] ?></td>
-              <td><?= htmlspecialcharsbx((string)$s['UF_NAME']) ?></td>
-              <td><span class="ts-code"><?= htmlspecialcharsbx($code) ?></span></td>
-              <td class="ts-url"><a href="<?= htmlspecialcharsbx($url) ?>" target="_blank"><?= htmlspecialcharsbx($url) ?></a></td>
-              <td>
-                <?php if ($isActive): ?>
-                  <span class="ts-pill ok"><span class="dot"></span> ACTIVE</span>
-                <?php else: ?>
-                  <span class="ts-pill off"><span class="dot"></span> OFF</span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <div class="ts-actionsRow">
-                  <button type="button"
-                          class="ui-btn ui-btn-light-border ui-btn-icon-more ts-menu-btn ts-ghost"
-                          data-site-id="<?= (int)$s['ID'] ?>"
-                          data-code="<?= htmlspecialcharsbx($code) ?>"
-                          data-name="<?= htmlspecialcharsbx((string)$s['UF_NAME']) ?>">
-                  </button>
-
-                  <form method="post" style="display:inline;">
-                    <?= bitrix_sessid_post() ?>
-                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
-                    <?php if ($isActive): ?>
-                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="disable">Выключить</button>
-                    <?php else: ?>
-                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="enable">Включить</button>
-                    <?php endif; ?>
-                  </form>
-
-                  <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
-                    <?= bitrix_sessid_post() ?>
-                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
-                    <button class="ui-btn ui-btn-danger ui-btn-light-border" type="submit" name="action" value="delete">Удалить</button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    </div>
-  <?php endif; ?>
-
-</div>
-
-<script>
-(function(){
-  // search + status filter
-  const input = document.getElementById('ts-search');
-  const rows = Array.from(document.querySelectorAll('tr.ts-row'));
-  const cnt = document.getElementById('ts-count');
-  const chips = Array.from(document.querySelectorAll('.ts-chip'));
-  let statusFilter = 'all';
-
-  function apply(){
-    const q = (input.value || '').toLowerCase().trim();
-    let shown = 0;
-
-    rows.forEach(r => {
-      const key = (r.getAttribute('data-search') || '');
-      const st = (r.getAttribute('data-status') || 'off');
-      const okSearch = (q === '' || key.includes(q));
-      const okStatus = (statusFilter === 'all' || st === statusFilter);
-      const ok = okSearch && okStatus;
-
-      r.style.display = ok ? '' : 'none';
-      if (ok) shown++;
-    });
-
-    if (cnt) cnt.textContent = shown;
-  }
-
-  chips.forEach(ch => {
-    ch.addEventListener('click', () => {
-      chips.forEach(x => x.classList.remove('is-active'));
-      ch.classList.add('is-active');
-      statusFilter = ch.getAttribute('data-filter') || 'all';
-      apply();
-    });
-  });
-
-  if (input) input.addEventListener('input', apply);
-
-  // context menu (⋯)
-  function makeMenuItems(code){
-    const base = '/local/typical_sites/';
-    const siteUrl = base + 'site.php?code=' + encodeURIComponent(code);
-
-    return [
-      { text: 'Открыть сайт', onclick: function(){ window.open(siteUrl, '_blank'); this.popupWindow.close(); } },
-      { delimiter: true },
-      { text: 'Страницы', onclick: function(){ window.location.href = base + 'pages.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
-      { text: 'Доступы', onclick: function(){ window.location.href = base + 'access_manage.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
-      { text: 'Логи', onclick: function(){ window.location.href = base + 'audit.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
-      { text: 'Настройки', onclick: function(){ window.location.href = base + 'settings.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
-      { delimiter: true },
-      {
-        text: 'Скопировать ссылку',
-        onclick: function(){
-          const text = siteUrl;
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text);
-          } else {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            document.body.removeChild(ta);
-          }
-          this.popupWindow.close();
-        }
-      }
-    ];
-  }
-
-  if (window.BX && BX.ready) {
-    BX.ready(function(){
-      document.querySelectorAll('.ts-menu-btn').forEach(function(btn){
-        btn.addEventListener('click', function(){
-          const code = btn.getAttribute('data-code') || '';
-          const id = btn.getAttribute('data-site-id') || '0';
-          BX.PopupMenu.show(
-            'ts_site_menu_' + id,
-            btn,
-            makeMenuItems(code),
-            { autoHide:true, closeByEsc:true, offsetTop:6, angle:true }
-          );
-        });
-      });
-    });
-  }
-})();
-</script>
-
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+/* More button (three dots) */
+.ts-page .ui-btn.ts-more{
+  width: 42px;
+  padding: 0;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+}
