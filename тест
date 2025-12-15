@@ -1,26 +1,14 @@
-function sortRows(key){
-  sortKey = key;
-  sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
+/* Fix Bitrix icon buttons alignment */
+.ts-page .ui-btn.ui-btn-icon-add{
+  position: relative;
+  padding-left: 44px; /* место под иконку */
+}
 
-  // update header arrows
-  table.querySelectorAll('th.ts-sort').forEach(th => th.classList.remove('is-sort-asc','is-sort-desc'));
-  const activeTh = table.querySelector('th.ts-sort[data-sort="'+ key +'"]');
-  if (activeTh) activeTh.classList.add(sortDir === 'asc' ? 'is-sort-asc' : 'is-sort-desc');
-
-  rows.sort((a,b) => {
-    const dir = (sortDir === 'asc') ? 1 : -1;
-    if (key === 'id') return dir * ((+a.dataset.id) - (+b.dataset.id));
-    if (key === 'status') {
-      const av = a.dataset.status || '';
-      const bv = b.dataset.status || '';
-      return dir * av.localeCompare(bv);
-    }
-    const av = (a.dataset[key] || '');
-    const bv = (b.dataset[key] || '');
-    return dir * av.localeCompare(bv);
-  });
-
-  const tbody = table.querySelector('tbody');
-  rows.forEach(r => tbody.appendChild(r));
-  apply();
+/* В Битриксе иконка часто сидит на :before */
+.ts-page .ui-btn.ui-btn-icon-add::before{
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
 }
