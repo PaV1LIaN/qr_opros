@@ -1,184 +1,286 @@
-:root{
-  --bg:#f3f6ff;
-  --card:#ffffff;
-  --line:#e7e9f2;
-  --text:#1f2430;
-  --muted:#6b7280;
-  --accent:#5b7cff;
-  --accent2:#8b5cf6;
-  --ok:#22c55e;
-  --warn:#f59e0b;
-  --danger:#ef4444;
-  --shadow: 0 8px 22px rgba(20, 28, 56, .08);
-  --shadow2: 0 10px 30px rgba(91, 124, 255, .18);
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+
+use Bitrix\Main\Context;
+use Bitrix\Main\UI\Extension;
+
+global $USER, $APPLICATION;
+
+$APPLICATION->SetTitle("Админка типовых сайтов");
+
+// Подключаем CSS
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
+
+// Bitrix UI + popup menu
+Extension::load([
+    "ui.buttons",
+    "ui.alerts",
+    "ui.icons",
+    "ui.fonts.opensans",
+    "main.popup",
+]);
+
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+    exit;
 }
 
-.ts-page{
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 14px 14px 22px;
-  color: var(--text);
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+$service = new \Cc10\SiteService();
+
+$request = Context::getCurrent()->getRequest();
+$errors = [];
+
+// действия (POST)
+if ($request->isPost() && check_bitrix_sessid()) {
+    $action = (string)$request->getPost('action');
+    $siteId = (int)$request->getPost('site_id');
+
+    try {
+        if ($action === 'disable') {
+            $service->setActive($siteId, false);
+        } elseif ($action === 'enable') {
+            $service->setActive($siteId, true);
+        } elseif ($action === 'delete') {
+            $service->deleteSite($siteId);
+        }
+        LocalRedirect('/local/typical_sites/admin.php');
+    } catch (\Throwable $e) {
+        $errors[] = $e->getMessage();
+    }
 }
 
-.ts-hero{
-  background: radial-gradient(1200px 280px at 10% 20%, rgba(91,124,255,.35), transparent 60%),
-              radial-gradient(900px 260px at 90% 10%, rgba(139,92,246,.35), transparent 55%),
-              linear-gradient(135deg, rgba(91,124,255,.12), rgba(139,92,246,.12));
-  border: 1px solid rgba(91,124,255,.18);
-  border-radius: 18px;
-  padding: 16px 16px 14px;
-  box-shadow: var(--shadow2);
-  margin-bottom: 14px;
-}
+$sites = $service->getAllSites();
+$totalCnt = count($sites);
+$activeCnt = 0;
+foreach ($sites as $s) if (!empty($s['UF_ACTIVE'])) $activeCnt++;
+$offCnt = $totalCnt - $activeCnt;
+?>
 
-.ts-heroTop{
-  display:flex;
-  justify-content:space-between;
-  align-items:flex-start;
-  gap:14px;
-}
+<div class="ts-page">
 
-.ts-title{
-  margin:0;
-  font-size: 22px;
-  letter-spacing: .2px;
-}
-.ts-sub{
-  margin-top: 4px;
-  color: rgba(31,36,48,.75);
-  font-size: 13px;
-}
+  <div class="ts-hero">
+    <div class="ts-heroTop">
+      <div>
+        <h1 class="ts-title">Администрирование типовых сайтов</h1>
+        <div class="ts-sub">Список сайтов, быстрые действия и меню “⋯”.</div>
+      </div>
 
-.ts-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+      <div class="ts-actions">
+        <a class="ui-btn ui-btn-primary ui-btn-icon-add ts-primary" href="/local/typical_sites/manage.php">Создать сайт</a>
+        <a class="ui-btn ui-btn-light-border ts-ghost" href="/local/typical_sites/admin.php">Обновить</a>
+      </div>
+    </div>
 
-.ts-grid{
-  display:flex;
-  gap:12px;
-  flex-wrap:wrap;
-  margin-top: 12px;
-}
+    <div class="ts-grid">
+      <div class="ts-stat">
+        <div class="k">Всего сайтов</div>
+        <div class="v"><?= (int)$totalCnt ?></div>
+        <div class="hint">включая выключенные</div>
+      </div>
+      <div class="ts-stat">
+        <div class="k">Активные</div>
+        <div class="v" style="color:var(--ok);"><?= (int)$activeCnt ?></div>
+        <div class="hint">доступны пользователям</div>
+      </div>
+      <div class="ts-stat">
+        <div class="k">Выключенные</div>
+        <div class="v" style="color:var(--warn);"><?= (int)$offCnt ?></div>
+        <div class="hint">не показываются / закрыты</div>
+      </div>
+    </div>
+  </div>
 
-.ts-stat{
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 12px 14px;
-  min-width: 220px;
-  box-shadow: var(--shadow);
-}
-.ts-stat .k{ color: var(--muted); font-size: 12px; }
-.ts-stat .v{ font-size: 22px; font-weight: 800; margin-top: 2px; }
-.ts-stat .hint{ margin-top: 4px; color: var(--muted); font-size: 12px; }
+  <?php if (!empty($errors)): ?>
+    <div class="ui-alert ui-alert-danger">
+      <span class="ui-alert-message">
+        <?php foreach ($errors as $e): ?>
+          <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+      </span>
+    </div>
+  <?php endif; ?>
 
-.ts-toolbar{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  flex-wrap:wrap;
-  margin: 12px 0;
-}
+  <div class="ts-toolbar">
+    <input class="ts-input" type="text" id="ts-search" placeholder="Поиск по названию или CODE...">
+    <button type="button" class="ts-chip is-active" data-filter="all">
+      <span class="ts-dot all"></span> Все <b id="ts-total"><?= (int)$totalCnt ?></b>
+    </button>
+    <button type="button" class="ts-chip" data-filter="active">
+      <span class="ts-dot ok"></span> Active <b id="ts-active"><?= (int)$activeCnt ?></b>
+    </button>
+    <button type="button" class="ts-chip" data-filter="off">
+      <span class="ts-dot off"></span> Off <b id="ts-off"><?= (int)$offCnt ?></b>
+    </button>
+    <span class="ts-pill" style="margin-left:auto;">
+      Показано: <b id="ts-count"><?= (int)$totalCnt ?></b>
+    </span>
+  </div>
 
-.ts-input{
-  height: 38px;
-  border: 1px solid rgba(31,36,48,.14);
-  background: rgba(255,255,255,.85);
-  border-radius: 12px;
-  padding: 0 12px;
-  min-width: 320px;
-  outline: none;
-}
-.ts-input:focus{
-  border-color: rgba(91,124,255,.45);
-  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
-}
+  <?php if (empty($sites)): ?>
+    <div class="ui-alert ui-alert-warning">
+      <span class="ui-alert-message">Сайтов пока нет.</span>
+    </div>
+  <?php else: ?>
+    <div class="ts-tableWrap">
+      <table class="ts-table">
+        <thead>
+          <tr>
+            <th style="width:70px;">ID</th>
+            <th>Название</th>
+            <th style="width:160px;">CODE</th>
+            <th>URL</th>
+            <th style="width:120px;">Статус</th>
+            <th style="width:340px;">Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($sites as $s): ?>
+            <?php
+              $code = (string)$s['UF_CODE'];
+              $url = '/local/typical_sites/site.php?code=' . urlencode($code);
+              $isActive = !empty($s['UF_ACTIVE']);
+              $searchKey = mb_strtolower(trim((string)$s['UF_NAME'] . ' ' . $code));
+            ?>
+            <tr class="ts-row"
+                data-search="<?= htmlspecialcharsbx($searchKey) ?>"
+                data-status="<?= ($isActive ? 'active' : 'off') ?>">
+              <td><?= (int)$s['ID'] ?></td>
+              <td><?= htmlspecialcharsbx((string)$s['UF_NAME']) ?></td>
+              <td><span class="ts-code"><?= htmlspecialcharsbx($code) ?></span></td>
+              <td class="ts-url"><a href="<?= htmlspecialcharsbx($url) ?>" target="_blank"><?= htmlspecialcharsbx($url) ?></a></td>
+              <td>
+                <?php if ($isActive): ?>
+                  <span class="ts-pill ok"><span class="dot"></span> ACTIVE</span>
+                <?php else: ?>
+                  <span class="ts-pill off"><span class="dot"></span> OFF</span>
+                <?php endif; ?>
+              </td>
+              <td>
+                <div class="ts-actionsRow">
+                  <button type="button"
+                          class="ui-btn ui-btn-light-border ui-btn-icon-more ts-menu-btn ts-ghost"
+                          data-site-id="<?= (int)$s['ID'] ?>"
+                          data-code="<?= htmlspecialcharsbx($code) ?>"
+                          data-name="<?= htmlspecialcharsbx((string)$s['UF_NAME']) ?>">
+                  </button>
 
-.ts-chip{
-  border: 1px solid rgba(31,36,48,.14);
-  background: rgba(255,255,255,.9);
-  border-radius: 999px;
-  padding: 7px 10px;
-  cursor: pointer;
-  font-size: 13px;
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-}
-.ts-chip:hover{ background:#fff; }
-.ts-chip.is-active{
-  border-color: rgba(91,124,255,.55);
-  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
-}
-.ts-dot{ width:8px; height:8px; border-radius:999px; display:inline-block; }
-.ts-dot.all{ background: var(--accent); }
-.ts-dot.ok{ background: var(--ok); }
-.ts-dot.off{ background: var(--warn); }
+                  <form method="post" style="display:inline;">
+                    <?= bitrix_sessid_post() ?>
+                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                    <?php if ($isActive): ?>
+                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="disable">Выключить</button>
+                    <?php else: ?>
+                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="enable">Включить</button>
+                    <?php endif; ?>
+                  </form>
 
-.ts-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(31,36,48,.12);
-  font-size: 12px;
-  background: #fff;
-}
-.ts-pill .dot{ width:8px; height:8px; border-radius:999px; }
-.ts-pill.ok{ border-color: rgba(34,197,94,.30); background: rgba(34,197,94,.08); }
-.ts-pill.ok .dot{ background: var(--ok); }
-.ts-pill.off{ border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.10); }
-.ts-pill.off .dot{ background: var(--warn); }
+                  <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
+                    <?= bitrix_sessid_post() ?>
+                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                    <button class="ui-btn ui-btn-danger ui-btn-light-border" type="submit" name="action" value="delete">Удалить</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  <?php endif; ?>
 
-.ts-tableWrap{
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  overflow: hidden;
-  box-shadow: var(--shadow);
-}
+</div>
 
-.ts-table{
-  width:100%;
-  border-collapse: collapse;
-}
-.ts-table th{
-  background: linear-gradient(180deg, #fbfbff, #f5f7ff);
-  border-bottom: 1px solid var(--line);
-  padding: 12px 10px;
-  text-align:left;
-  font-weight: 700;
-  color: rgba(31,36,48,.88);
-}
-.ts-table td{
-  padding: 12px 10px;
-  border-bottom: 1px solid rgba(231,233,242,.75);
-  vertical-align: top;
-}
-.ts-table tr:nth-child(2n) td{ background: rgba(245,247,255,.35); }
-.ts-table tr:hover td{ background: rgba(91,124,255,.08); }
+<script>
+(function(){
+  // search + status filter
+  const input = document.getElementById('ts-search');
+  const rows = Array.from(document.querySelectorAll('tr.ts-row'));
+  const cnt = document.getElementById('ts-count');
+  const chips = Array.from(document.querySelectorAll('.ts-chip'));
+  let statusFilter = 'all';
 
-.ts-code{
-  display:inline-flex;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(91,124,255,.30);
-  background: rgba(91,124,255,.10);
-  font-weight: 600;
-}
-.ts-url{ word-break: break-all; }
-.ts-url a{ color: #2f57ff; text-decoration: none; }
-.ts-url a:hover{ text-decoration: underline; }
+  function apply(){
+    const q = (input.value || '').toLowerCase().trim();
+    let shown = 0;
 
-.ts-actionsRow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    rows.forEach(r => {
+      const key = (r.getAttribute('data-search') || '');
+      const st = (r.getAttribute('data-status') || 'off');
+      const okSearch = (q === '' || key.includes(q));
+      const okStatus = (statusFilter === 'all' || st === statusFilter);
+      const ok = okSearch && okStatus;
 
-.ui-btn.ts-primary{
-  background: linear-gradient(135deg, var(--accent), var(--accent2));
-  border-color: transparent;
-}
-.ui-btn.ts-primary:hover{ filter: brightness(1.02); }
-.ui-btn.ts-ghost{
-  background: rgba(255,255,255,.75);
-}
-.ui-btn.ts-ghost:hover{
-  background:#fff;
-}
+      r.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+
+    if (cnt) cnt.textContent = shown;
+  }
+
+  chips.forEach(ch => {
+    ch.addEventListener('click', () => {
+      chips.forEach(x => x.classList.remove('is-active'));
+      ch.classList.add('is-active');
+      statusFilter = ch.getAttribute('data-filter') || 'all';
+      apply();
+    });
+  });
+
+  if (input) input.addEventListener('input', apply);
+
+  // context menu (⋯)
+  function makeMenuItems(code){
+    const base = '/local/typical_sites/';
+    const siteUrl = base + 'site.php?code=' + encodeURIComponent(code);
+
+    return [
+      { text: 'Открыть сайт', onclick: function(){ window.open(siteUrl, '_blank'); this.popupWindow.close(); } },
+      { delimiter: true },
+      { text: 'Страницы', onclick: function(){ window.location.href = base + 'pages.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
+      { text: 'Доступы', onclick: function(){ window.location.href = base + 'access_manage.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
+      { text: 'Логи', onclick: function(){ window.location.href = base + 'audit.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
+      { text: 'Настройки', onclick: function(){ window.location.href = base + 'settings.php?code=' + encodeURIComponent(code); this.popupWindow.close(); } },
+      { delimiter: true },
+      {
+        text: 'Скопировать ссылку',
+        onclick: function(){
+          const text = siteUrl;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          this.popupWindow.close();
+        }
+      }
+    ];
+  }
+
+  if (window.BX && BX.ready) {
+    BX.ready(function(){
+      document.querySelectorAll('.ts-menu-btn').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          const code = btn.getAttribute('data-code') || '';
+          const id = btn.getAttribute('data-site-id') || '0';
+          BX.PopupMenu.show(
+            'ts_site_menu_' + id,
+            btn,
+            makeMenuItems(code),
+            { autoHide:true, closeByEsc:true, offsetTop:6, angle:true }
+          );
+        });
+      });
+    });
+  }
+})();
+</script>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
