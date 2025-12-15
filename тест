@@ -1,23 +1,20 @@
-public function assertPageSlugUnique(int $siteId, string $slug, int $excludePageId = 0): void
+public function assertSiteCodeUnique(string $code, int $excludeSiteId = 0): void
 {
-    $pagesClass = $this->pagesClass;
+    $sitesClass = $this->sitesClass;
 
-    $filter = [
-        '=UF_SITE' => $siteId,
-        '=UF_SLUG' => $slug,
-    ];
+    $filter = ['=UF_CODE' => $code];
 
-    if ($excludePageId > 0) {
-        $filter['!ID'] = $excludePageId; // исключаем текущую страницу при обновлении
+    if ($excludeSiteId > 0) {
+        $filter['!ID'] = $excludeSiteId;
     }
 
-    $row = $pagesClass::getList([
+    $row = $sitesClass::getList([
         'filter' => $filter,
         'select' => ['ID'],
         'limit' => 1,
     ])->fetch();
 
     if ($row) {
-        throw new \InvalidArgumentException('SLUG уже используется на этом сайте. Выбери другой.');
+        throw new \InvalidArgumentException('CODE уже используется. Выбери другой.');
     }
 }
