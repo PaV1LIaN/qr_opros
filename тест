@@ -1,20 +1,255 @@
-public function assertSiteCodeUnique(string $code, int $excludeSiteId = 0): void
-{
-    $sitesClass = $this->sitesClass;
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-    $filter = ['=UF_CODE' => $code];
+use Bitrix\Main\Context;
 
-    if ($excludeSiteId > 0) {
-        $filter['!ID'] = $excludeSiteId;
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+global $USER, $APPLICATION;
+
+$APPLICATION->SetTitle("Создать типовой сайт");
+
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$request = Context::getCurrent()->getRequest();
+$service = new \Cc10\SiteService();
+
+$errors = [];
+$success = '';
+
+$name = (string)($request->getPost('NAME') ?? '');
+$code = (string)($request->getPost('CODE') ?? '');
+$active = ((string)($request->getPost('ACTIVE') ?? 'Y')) === 'Y';
+$homeSlug = (string)($request->getPost('HOME_SLUG') ?? ''); // можно пустым
+
+$viewers = (array)($request->getPost('VIEWERS') ?? []);
+$admins  = (array)($request->getPost('ADMINS') ?? []);
+$devs    = (array)($request->getPost('DEVELOPERS') ?? []);
+
+function ts_ids(array $arr): array {
+    $out = [];
+    foreach ($arr as $v) {
+        $id = (int)$v;
+        if ($id > 0) $out[$id] = true;
+    }
+    return array_keys($out);
+}
+
+function ts_role_normalize(array $viewers, array $admins, array $devs): array {
+    // приоритет: DEVELOPER > ADMIN > VIEWER
+    $devSet = array_fill_keys($devs, true);
+    $adminSet = array_fill_keys($admins, true);
+    $viewerSet = array_fill_keys($viewers, true);
+
+    // убираем dev из admin/viewer
+    foreach ($devSet as $id => $_) {
+        unset($adminSet[$id], $viewerSet[$id]);
+    }
+    // убираем admin из viewer
+    foreach ($adminSet as $id => $_) {
+        unset($viewerSet[$id]);
     }
 
-    $row = $sitesClass::getList([
-        'filter' => $filter,
-        'select' => ['ID'],
-        'limit' => 1,
-    ])->fetch();
+    return [
+        array_keys($viewerSet),
+        array_keys($adminSet),
+        array_keys($devSet),
+    ];
+}
 
-    if ($row) {
-        throw new \InvalidArgumentException('CODE уже используется. Выбери другой.');
+// POST: создать
+if ($request->isPost() && check_bitrix_sessid()) {
+    try {
+        $name = trim($name);
+        if ($name === '') {
+            throw new \InvalidArgumentException("Название сайта обязательно");
+        }
+
+        $code = mb_strtolower(trim($code));
+        $code = $service->validateSlug($code);
+        $service->assertSiteCodeUnique($code);
+
+        $homeSlug = trim($homeSlug);
+        if ($homeSlug !== '') {
+            $homeSlug = mb_strtolower($homeSlug);
+            $homeSlug = $service->validateSlug($homeSlug);
+        }
+
+        $viewers = ts_ids($viewers);
+        $admins  = ts_ids($admins);
+        $devs    = ts_ids($devs);
+
+        // Если девов не выбрали — делаем создателя developer
+        if (empty($devs)) {
+            $devs = [(int)$USER->GetID()];
+        }
+
+        // нормализуем пересечения ролей
+        [$viewers, $admins, $devs] = ts_role_normalize($viewers, $admins, $devs);
+
+        // 1) создаём сайт
+        // ВАЖНО: ниже ожидается, что у тебя есть метод addSite() в сервисе.
+        // Если у тебя другой метод — скажи, подстрою.
+        $siteId = $service->addSite([
+            'UF_NAME' => $name,
+            'UF_CODE' => $code,
+            'UF_ACTIVE' => $active,
+            'UF_HOME_SLUG' => $homeSlug,
+        ]);
+
+        // 2) назначаем доступы
+        $service->setSiteAccess((int)$siteId, $viewers, $admins, $devs);
+
+        // 3) аудит
+        $service->logAction((int)$siteId, (int)$USER->GetID(), 'SITE_CREATE', 'site', (int)$siteId, [
+            'name' => $name,
+            'code' => $code,
+            'active' => $active,
+            'home_slug' => $homeSlug,
+            'viewers' => $viewers,
+            'admins' => $admins,
+            'developers' => $devs,
+        ]);
+
+        LocalRedirect('/local/typical_sites/site.php?code=' . urlencode($code));
+    } catch (\Throwable $e) {
+        $errors[] = $e->getMessage();
     }
 }
+
+// Пользователи (простая выдача чекбоксов; на больших порталах лучше заменить на selector)
+$users = [];
+$rs = \CUser::GetList(
+    ($by = "last_name"),
+    ($order = "asc"),
+    ['ACTIVE' => 'Y'],
+    ['FIELDS' => ['ID','NAME','LAST_NAME','SECOND_NAME','LOGIN','EMAIL'], 'NAV_PARAMS' => ['nTopCount' => 300]]
+);
+while ($u = $rs->Fetch()) {
+    $fio = trim(($u['LAST_NAME'] ?? '') . ' ' . ($u['NAME'] ?? '') . ' ' . ($u['SECOND_NAME'] ?? ''));
+    if ($fio === '') $fio = (string)($u['LOGIN'] ?? ('user#' . $u['ID']));
+    $users[] = ['ID' => (int)$u['ID'], 'TITLE' => $fio];
+}
+
+function ts_checked(array $arr, int $id): string {
+    foreach ($arr as $v) if ((int)$v === $id) return 'checked';
+    return '';
+}
+?>
+
+<h1>Создать типовой сайт</h1>
+
+<p>
+    <a href="/local/typical_sites/admin.php">← В админку</a>
+</p>
+
+<?php if (!empty($errors)): ?>
+    <div style="color:red; margin:10px 0;">
+        <?php foreach ($errors as $e): ?>
+            <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
+
+<form method="post">
+    <?= bitrix_sessid_post() ?>
+
+    <div style="margin-top:10px;">
+        <label>Название сайта:</label><br>
+        <input type="text" name="NAME" value="<?= htmlspecialcharsbx($name) ?>" style="width:420px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>CODE (уникальный):</label><br>
+        <input type="text" name="CODE" value="<?= htmlspecialcharsbx($code) ?>" style="width:240px;">
+        <small>только a-z, 0-9, "-" или "_"</small>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>HOME_SLUG (необязательно):</label><br>
+        <input type="text" name="HOME_SLUG" value="<?= htmlspecialcharsbx($homeSlug) ?>" style="width:240px;">
+        <small>какая страница открывается по умолчанию (например: index)</small>
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Активен:</label>
+        <select name="ACTIVE">
+            <option value="Y" <?= ($active ? 'selected' : '') ?>>Y</option>
+            <option value="N" <?= (!$active ? 'selected' : '') ?>>N</option>
+        </select>
+    </div>
+
+    <hr>
+
+    <div style="margin-top:10px;">
+        <label>Поиск пользователя:</label><br>
+        <input type="text" id="ts-user-search" placeholder="Начни вводить..." style="width:320px;">
+        <small>фильтр работает по списку ниже</small>
+    </div>
+
+    <div style="display:flex; gap:20px; margin-top:15px; align-items:flex-start;">
+        <div style="flex:1; border:1px solid #ddd; padding:10px;">
+            <h3 style="margin-top:0;">VIEWERS</h3>
+            <?php foreach ($users as $u): ?>
+                <div class="ts-user-row" data-name="<?= htmlspecialcharsbx(mb_strtolower($u['TITLE'])) ?>">
+                    <label>
+                        <input type="checkbox" name="VIEWERS[]" value="<?= (int)$u['ID'] ?>" <?= ts_checked($viewers, (int)$u['ID']) ?>>
+                        <?= htmlspecialcharsbx($u['TITLE']) ?> (<?= (int)$u['ID'] ?>)
+                    </label>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div style="flex:1; border:1px solid #ddd; padding:10px;">
+            <h3 style="margin-top:0;">ADMINS</h3>
+            <?php foreach ($users as $u): ?>
+                <div class="ts-user-row" data-name="<?= htmlspecialcharsbx(mb_strtolower($u['TITLE'])) ?>">
+                    <label>
+                        <input type="checkbox" name="ADMINS[]" value="<?= (int)$u['ID'] ?>" <?= ts_checked($admins, (int)$u['ID']) ?>>
+                        <?= htmlspecialcharsbx($u['TITLE']) ?> (<?= (int)$u['ID'] ?>)
+                    </label>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div style="flex:1; border:1px solid #ddd; padding:10px;">
+            <h3 style="margin-top:0;">DEVELOPERS</h3>
+            <small>если никого не выбрать — создатель станет developer</small>
+            <?php foreach ($users as $u): ?>
+                <div class="ts-user-row" data-name="<?= htmlspecialcharsbx(mb_strtolower($u['TITLE'])) ?>">
+                    <label>
+                        <input type="checkbox" name="DEVELOPERS[]" value="<?= (int)$u['ID'] ?>" <?= ts_checked($devs, (int)$u['ID']) ?>>
+                        <?= htmlspecialcharsbx($u['TITLE']) ?> (<?= (int)$u['ID'] ?>)
+                    </label>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit">Создать</button>
+    </div>
+</form>
+
+<script>
+(function(){
+  const input = document.getElementById('ts-user-search');
+  if (!input) return;
+
+  input.addEventListener('input', function(){
+    const q = (input.value || '').toLowerCase().trim();
+    const rows = document.querySelectorAll('.ts-user-row');
+    rows.forEach(r => {
+      const name = (r.getAttribute('data-name') || '');
+      r.style.display = (q === '' || name.includes(q)) ? '' : 'none';
+    });
+  });
+})();
+</script>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
