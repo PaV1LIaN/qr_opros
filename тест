@@ -1,110 +1,26 @@
-<?php
+.ts-wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.ts-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+.ts-title { margin:0; font-size:22px; }
+.ts-nav { display:flex; flex-wrap:wrap; gap:8px; margin: 8px 0 14px; }
+.ts-nav a { padding:6px 10px; border:1px solid #ddd; border-radius:10px; text-decoration:none; }
+.ts-nav a:hover { background:#f7f7f7; }
 
-namespace Cc10\TypicalSites\Components;
+.ts-card { border:1px solid #e6e6e6; border-radius:14px; padding:12px; background:#fff; margin:12px 0; }
 
-use CBitrixComponent;
-use Bitrix\Main\Context;
+.ts-table { width:100%; border-collapse:collapse; }
+.ts-table th, .ts-table td { border-bottom:1px solid #eee; padding:10px 8px; text-align:left; vertical-align:top; }
+.ts-table th { background:#fafafa; font-weight:600; }
+.ts-table tr:hover td { background:#fcfcfc; }
 
-require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
+.ts-btn { display:inline-block; padding:7px 10px; border:1px solid #ddd; border-radius:10px; background:#fff; cursor:pointer; text-decoration:none; }
+.ts-btn:hover { background:#f7f7f7; }
+.ts-btn-danger { border-color:#f2b8b8; }
+.ts-badge { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; }
+.ts-badge-ok { border-color:#bfe7c8; }
+.ts-badge-off { border-color:#f0d1a8; }
 
-class SitesEditComponent extends CBitrixComponent
-{
-    protected function checkAccess(): bool
-    {
-        global $USER;
-        return $USER->IsAdmin(); // пока только админ
-    }
+.ts-error { border:1px solid #f2b8b8; background:#fff5f5; padding:10px; border-radius:12px; }
+.ts-success { border:1px solid #bfe7c8; background:#f4fff6; padding:10px; border-radius:12px; }
 
-    public function executeComponent()
-    {
-        global $USER;
-
-        if (!$this->checkAccess()) {
-            ShowError("Нет прав на управление типовыми сайтами.");
-            return;
-        }
-
-        $request = Context::getCurrent()->getRequest();
-
-        $this->arResult['ERRORS'] = [];
-        $this->arResult['FORM'] = [
-            'NAME' => '',
-            'CODE' => '',
-            'VIEWERS' => [],
-            'ADMINS' => [],
-        ];
-
-        if ($request->isPost() && check_bitrix_sessid()) {
-            $nameRaw = (string)$request->getPost('NAME');
-            $codeRaw = (string)$request->getPost('CODE');
-
-            $name = trim($nameRaw);
-            $code = mb_strtolower(trim($codeRaw));
-
-            $viewers = array_unique(array_filter(array_map('intval', (array)$request->getPost('VIEWERS'))));
-            $admins  = array_unique(array_filter(array_map('intval', (array)$request->getPost('ADMINS'))));
-
-            // чтобы шаблон мог подставить обратно введённые значения при ошибке
-            $this->arResult['FORM'] = [
-                'NAME' => $nameRaw,
-                'CODE' => $codeRaw,
-                'VIEWERS' => $viewers,
-                'ADMINS' => $admins,
-            ];
-
-            if ($name === '') {
-                $this->arResult['ERRORS'][] = 'Не заполнено название.';
-            }
-            if ($code === '') {
-                $this->arResult['ERRORS'][] = 'Не заполнен CODE.';
-            }
-
-            $service = new \Cc10\SiteService();
-
-            // Валидация + уникальность CODE
-            if (empty($this->arResult['ERRORS'])) {
-                try {
-                    $code = $service->validateSlug($code);
-                    $service->assertSiteCodeUnique($code);
-                } catch (\Throwable $e) {
-                    $this->arResult['ERRORS'][] = $e->getMessage();
-                }
-            }
-
-            if (empty($this->arResult['ERRORS'])) {
-                try {
-                    $siteId = $service->createSite([
-                        'NAME' => $name,
-                        'CODE' => $code, // уже валидный и уникальный
-                    ], (int)$USER->GetID());
-
-                    // Назначаем доступы + создатель как DEVELOPER (чтобы не остаться без девелопера)
-                    $service->setSiteAccess($siteId, $viewers, $admins, [(int)$USER->GetID()]);
-
-                    // создаём папку для сайта
-                    $folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/' . $code . '/';
-                    if (!is_dir($folderPath)) {
-                        mkdir($folderPath, 0755, true);
-
-                        // копируем шаблон
-                        $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/templates/default/';
-                        if (is_dir($templatePath)) {
-                            foreach (scandir($templatePath) as $file) {
-                                if ($file === '.' || $file === '..') {
-                                    continue;
-                                }
-                                copy($templatePath . $file, $folderPath . $file);
-                            }
-                        }
-                    }
-
-                    LocalRedirect('/local/typical_sites/index.php');
-                } catch (\Throwable $e) {
-                    $this->arResult['ERRORS'][] = $e->getMessage();
-                }
-            }
-        }
-
-        $this->includeComponentTemplate();
-    }
-}
+.ts-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.ts-input { padding:7px 10px; border:1px solid #ddd; border-radius:10px; }
