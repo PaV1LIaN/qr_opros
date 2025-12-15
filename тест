@@ -1,10 +1,13 @@
-public function getPagesForSiteAll(int $siteId, bool $includeInactive = true, bool $includeDeleted = true): array
+public function getBlocksForPageAll(int $siteId, int $pageId, bool $onlyActive = false, bool $includeDeleted = true): array
 {
-    $pagesClass = $this->pagesClass;
+    $blocksClass = $this->blocksClass;
 
-    $filter = ['=UF_SITE' => $siteId];
+    $filter = [
+        '=UF_SITE' => $siteId,
+        '=UF_PAGE' => $pageId,
+    ];
 
-    if (!$includeInactive) {
+    if ($onlyActive) {
         $filter['=UF_ACTIVE'] = true;
     }
 
@@ -12,10 +15,10 @@ public function getPagesForSiteAll(int $siteId, bool $includeInactive = true, bo
         $filter['=UF_DELETED'] = false;
     }
 
-    $res = $pagesClass::getList([
+    $res = $blocksClass::getList([
         'filter' => $filter,
         'select' => [
-            'ID','UF_SITE','UF_TITLE','UF_SLUG','UF_SORT','UF_ACTIVE',
+            'ID','UF_SITE','UF_PAGE','UF_TYPE','UF_TITLE','UF_SORT','UF_ACTIVE','UF_SETTINGS',
             'UF_DELETED','UF_DELETED_AT','UF_DELETED_BY'
         ],
         'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
