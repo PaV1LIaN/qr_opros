@@ -1,9 +1,110 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Управление типовыми сайтами");
-?>
 
-<?$APPLICATION->IncludeComponent("sitebuilder:typical.sites.edit", "", []);?>
+namespace Cc10\TypicalSites\Components;
 
-<?php
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
+use CBitrixComponent;
+use Bitrix\Main\Context;
+
+require_once $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/lib/SiteService.php';
+
+class SitesEditComponent extends CBitrixComponent
+{
+    protected function checkAccess(): bool
+    {
+        global $USER;
+        return $USER->IsAdmin(); // пока только админ
+    }
+
+    public function executeComponent()
+    {
+        global $USER;
+
+        if (!$this->checkAccess()) {
+            ShowError("Нет прав на управление типовыми сайтами.");
+            return;
+        }
+
+        $request = Context::getCurrent()->getRequest();
+
+        $this->arResult['ERRORS'] = [];
+        $this->arResult['FORM'] = [
+            'NAME' => '',
+            'CODE' => '',
+            'VIEWERS' => [],
+            'ADMINS' => [],
+        ];
+
+        if ($request->isPost() && check_bitrix_sessid()) {
+            $nameRaw = (string)$request->getPost('NAME');
+            $codeRaw = (string)$request->getPost('CODE');
+
+            $name = trim($nameRaw);
+            $code = mb_strtolower(trim($codeRaw));
+
+            $viewers = array_unique(array_filter(array_map('intval', (array)$request->getPost('VIEWERS'))));
+            $admins  = array_unique(array_filter(array_map('intval', (array)$request->getPost('ADMINS'))));
+
+            // чтобы шаблон мог подставить обратно введённые значения при ошибке
+            $this->arResult['FORM'] = [
+                'NAME' => $nameRaw,
+                'CODE' => $codeRaw,
+                'VIEWERS' => $viewers,
+                'ADMINS' => $admins,
+            ];
+
+            if ($name === '') {
+                $this->arResult['ERRORS'][] = 'Не заполнено название.';
+            }
+            if ($code === '') {
+                $this->arResult['ERRORS'][] = 'Не заполнен CODE.';
+            }
+
+            $service = new \Cc10\SiteService();
+
+            // Валидация + уникальность CODE
+            if (empty($this->arResult['ERRORS'])) {
+                try {
+                    $code = $service->validateSlug($code);
+                    $service->assertSiteCodeUnique($code);
+                } catch (\Throwable $e) {
+                    $this->arResult['ERRORS'][] = $e->getMessage();
+                }
+            }
+
+            if (empty($this->arResult['ERRORS'])) {
+                try {
+                    $siteId = $service->createSite([
+                        'NAME' => $name,
+                        'CODE' => $code, // уже валидный и уникальный
+                    ], (int)$USER->GetID());
+
+                    // Назначаем доступы + создатель как DEVELOPER (чтобы не остаться без девелопера)
+                    $service->setSiteAccess($siteId, $viewers, $admins, [(int)$USER->GetID()]);
+
+                    // создаём папку для сайта
+                    $folderPath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/' . $code . '/';
+                    if (!is_dir($folderPath)) {
+                        mkdir($folderPath, 0755, true);
+
+                        // копируем шаблон
+                        $templatePath = $_SERVER['DOCUMENT_ROOT'] . '/local/typical_sites/sites/templates/default/';
+                        if (is_dir($templatePath)) {
+                            foreach (scandir($templatePath) as $file) {
+                                if ($file === '.' || $file === '..') {
+                                    continue;
+                                }
+                                copy($templatePath . $file, $folderPath . $file);
+                            }
+                        }
+                    }
+
+                    LocalRedirect('/local/typical_sites/index.php');
+                } catch (\Throwable $e) {
+                    $this->arResult['ERRORS'][] = $e->getMessage();
+                }
+            }
+        }
+
+        $this->includeComponentTemplate();
+    }
+}
