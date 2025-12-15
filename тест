@@ -1,20 +1,26 @@
-/* --- Table sort arrows --- */
-.ts-table th.ts-sort{
-  position: relative;
-  user-select: none;
-  white-space: nowrap;
-}
-.ts-table th.ts-sort::after{
-  content: "↕";
-  margin-left: 8px;
-  font-size: 12px;
-  color: rgba(31,36,48,.35);
-}
-.ts-table th.ts-sort.is-sort-asc::after{
-  content: "↑";
-  color: rgba(91,124,255,.95);
-}
-.ts-table th.ts-sort.is-sort-desc::after{
-  content: "↓";
-  color: rgba(91,124,255,.95);
+function sortRows(key){
+  sortKey = key;
+  sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
+
+  // update header arrows
+  table.querySelectorAll('th.ts-sort').forEach(th => th.classList.remove('is-sort-asc','is-sort-desc'));
+  const activeTh = table.querySelector('th.ts-sort[data-sort="'+ key +'"]');
+  if (activeTh) activeTh.classList.add(sortDir === 'asc' ? 'is-sort-asc' : 'is-sort-desc');
+
+  rows.sort((a,b) => {
+    const dir = (sortDir === 'asc') ? 1 : -1;
+    if (key === 'id') return dir * ((+a.dataset.id) - (+b.dataset.id));
+    if (key === 'status') {
+      const av = a.dataset.status || '';
+      const bv = b.dataset.status || '';
+      return dir * av.localeCompare(bv);
+    }
+    const av = (a.dataset[key] || '');
+    const bv = (b.dataset[key] || '');
+    return dir * av.localeCompare(bv);
+  });
+
+  const tbody = table.querySelector('tbody');
+  rows.forEach(r => tbody.appendChild(r));
+  apply();
 }
