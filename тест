@@ -1,159 +1,30 @@
-<?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
+public function getPagesForSiteAll(int $siteId, bool $includeInactive = true, bool $includeDeleted = true): array
+{
+    $pagesClass = $this->pagesClass;
 
-use Bitrix\Main\Context;
+    $filter = ['=UF_SITE' => $siteId];
 
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
-
-global $USER, $APPLICATION;
-
-$request = Context::getCurrent()->getRequest();
-
-$code = trim((string)$request->getQuery('code'));
-$showDeleted = ($request->getQuery('show_deleted') === 'Y');
-
-if ($code === '') {
-    ShowError("Не указан code");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-if (!$USER->IsAuthorized()) {
-    ShowError("Требуется авторизация");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$service = new \Cc10\SiteService();
-
-$site = $service->getSiteByCode($code);
-if (!$site) {
-    ShowError("Сайт не найден или не активен");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$siteId = (int)$site['ID'];
-$role = $service->getUserRole((int)$USER->GetID(), $siteId);
-
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на управление страницами");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$errors = [];
-
-// POST: удалить/восстановить страницу
-if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $pageId = (int)$request->getPost('page_id');
-
-    try {
-        if ($pageId > 0 && $action === 'delete') {
-            $service->softDeletePage($pageId, $siteId, (int)$USER->GetID());
-
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, [
-                'soft' => true,
-            ]);
-
-        } elseif ($pageId > 0 && $action === 'restore') {
-            $service->restorePage($pageId, $siteId);
-
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_RESTORE', 'page', $pageId, []);
-        }
-
-        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code) . ($showDeleted ? '&show_deleted=Y' : ''));
-    } catch (\Throwable $e) {
-        $errors[] = $e->getMessage();
+    if (!$includeInactive) {
+        $filter['=UF_ACTIVE'] = true;
     }
+
+    if (!$includeDeleted) {
+        $filter['=UF_DELETED'] = false;
+    }
+
+    $res = $pagesClass::getList([
+        'filter' => $filter,
+        'select' => [
+            'ID','UF_SITE','UF_TITLE','UF_SLUG','UF_SORT','UF_ACTIVE',
+            'UF_DELETED','UF_DELETED_AT','UF_DELETED_BY'
+        ],
+        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
+    ]);
+
+    $rows = [];
+    while ($row = $res->fetch()) {
+        $rows[] = $row;
+    }
+
+    return $rows;
 }
-
-// Получаем страницы (включая неактивные), дальше отфильтруем/покажем deleted в таблице
-// Если у тебя getPagesForSite уже фильтрует deleted — в "показать удалённые" они не появятся.
-// Тогда понадобится отдельный метод getPagesForSiteAll(includeDeleted=true). Если столкнёшься — скажи.
-$pages = $service->getPagesForSite($siteId, true);
-
-$APPLICATION->SetTitle("Страницы сайта");
-?>
-
-<h1>Страницы: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
-
-<p>
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
-    &nbsp;|&nbsp;
-    <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>">+ Создать страницу</a>
-</p>
-
-<p style="margin:10px 0;">
-    <?php
-    $toggleUrl = '/local/typical_sites/pages.php?code=' . urlencode($code) . ($showDeleted ? '' : '&show_deleted=Y');
-    ?>
-    <a href="<?= htmlspecialcharsbx($toggleUrl) ?>">
-        <?= $showDeleted ? 'Скрыть удалённые' : 'Показать удалённые' ?>
-    </a>
-</p>
-
-<?php if (!empty($errors)): ?>
-    <div style="color:red; margin:10px 0;">
-        <?php foreach ($errors as $e): ?>
-            <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
-
-<?php if (empty($pages)): ?>
-    <p>Страниц пока нет.</p>
-<?php else: ?>
-    <table border="1" cellpadding="6" cellspacing="0">
-        <tr>
-            <th>ID</th>
-            <th>Заголовок</th>
-            <th>SLUG</th>
-            <th>SORT</th>
-            <th>Активна</th>
-            <th>Удалена</th>
-            <th>Действия</th>
-        </tr>
-
-        <?php foreach ($pages as $p): ?>
-            <?php $isDeleted = !empty($p['UF_DELETED']); ?>
-            <?php if (!$showDeleted && $isDeleted) continue; ?>
-
-            <tr>
-                <td><?= (int)$p['ID'] ?></td>
-                <td><?= htmlspecialcharsbx((string)$p['UF_TITLE']) ?></td>
-                <td><?= htmlspecialcharsbx((string)$p['UF_SLUG']) ?></td>
-                <td><?= (int)$p['UF_SORT'] ?></td>
-                <td><?= (!empty($p['UF_ACTIVE']) ? 'Y' : 'N') ?></td>
-                <td><?= ($isDeleted ? 'Y' : 'N') ?></td>
-                <td>
-                    <?php if (!$isDeleted): ?>
-                        <a href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Редактировать</a>
-                        |
-                        <a href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Блоки</a>
-                        |
-                        <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$p['UF_SLUG']) ?>" target="_blank">Открыть</a>
-                        |
-                        <form method="post" style="display:inline;" onsubmit="return confirm('Удалить страницу (в корзину)?');">
-                            <?= bitrix_sessid_post() ?>
-                            <input type="hidden" name="action" value="delete">
-                            <input type="hidden" name="page_id" value="<?= (int)$p['ID'] ?>">
-                            <button type="submit">Удалить</button>
-                        </form>
-                    <?php else: ?>
-                        <form method="post" style="display:inline;" onsubmit="return confirm('Восстановить страницу?');">
-                            <?= bitrix_sessid_post() ?>
-                            <input type="hidden" name="action" value="restore">
-                            <input type="hidden" name="page_id" value="<?= (int)$p['ID'] ?>">
-                            <button type="submit">Восстановить</button>
-                        </form>
-                    <?php endif; ?>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-    </table>
-<?php endif; ?>
-
-<?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
