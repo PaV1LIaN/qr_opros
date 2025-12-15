@@ -2,25 +2,17 @@
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
-use Bitrix\Main\UI\Extension;
-
-global $USER, $APPLICATION;
-
-Extension::load([
-    "ui.buttons",
-    "ui.alerts",
-    "ui.icons",
-    "ui.fonts.opensans",
-    "main.popup",
-]);
-
-$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
+use Bitrix\Main\Loader;
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
+global $USER, $APPLICATION;
+
 $request = Context::getCurrent()->getRequest();
+
 $code = trim((string)$request->getQuery('code'));
 $pageId = (int)$request->getQuery('page_id');
+$blockId = (int)$request->getQuery('block_id');
 
 if ($code === '' || $pageId <= 0) {
     ShowError("Не указан code или page_id");
@@ -35,10 +27,10 @@ if (!$USER->IsAuthorized()) {
 }
 
 $service = new \Cc10\SiteService();
-$site = $service->getSiteByCode($code);
 
+$site = $service->getSiteByCode($code);
 if (!$site) {
-    ShowError("Сайт не найден");
+    ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
@@ -46,380 +38,232 @@ if (!$site) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на управление блоками");
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
+    ShowError("Нет прав на редактирование блоков");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-$page = $service->getPageById($pageId, $siteId);
-if (!$page) {
-    ShowError("Страница не найдена");
+$page = $service->getPageById($pageId);
+if (!$page || (int)$page['UF_SITE'] !== $siteId) {
+    ShowError("Страница не найдена или не принадлежит этому сайту");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
-
-$APPLICATION->SetTitle("Блоки: " . (string)$page['UF_TITLE']);
 
 $errors = [];
+$block = null;
 
-// actions
+if ($blockId > 0) {
+    $block = $service->getBlockById($blockId);
+    if (!$block) {
+        $errors[] = "Блок не найден";
+        $blockId = 0;
+    } elseif ((int)$block['UF_SITE'] !== $siteId || (int)$block['UF_PAGE'] !== (int)$page['ID']) {
+        $errors[] = "Блок не принадлежит этой странице/сайту";
+        $block = null;
+        $blockId = 0;
+    }
+}
+
+$settings = $block ? $service->decodeSettings((string)$block['UF_SETTINGS']) : [];
+
 if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $blockId = (int)$request->getPost('block_id');
+    $type = strtoupper(trim((string)$request->getPost('TYPE')));
+    $title = (string)$request->getPost('TITLE');
+    $sort = (int)$request->getPost('SORT');
+    $active = ($request->getPost('ACTIVE') === 'Y');
 
     try {
-        if ($blockId <= 0) {
-            throw new \InvalidArgumentException("Некорректный block_id");
+        // SETTINGS по типу
+        if ($type === 'TEXT') {
+            $html = (string)$request->getPost('TEXT_HTML');
+            $set = ['html' => $html];
+
+        } elseif ($type === 'IFRAME') {
+            $url = trim((string)$request->getPost('IFRAME_URL'));
+            $height = (int)$request->getPost('IFRAME_HEIGHT');
+            if ($height <= 200) $height = 600;
+
+            if ($url !== '' && !$service->isSafeUrl($url)) {
+                throw new \InvalidArgumentException('IFRAME URL должен быть http/https и не должен начинаться с javascript:/data:');
+            }
+
+            $set = ['url' => $url, 'height' => $height];
+
+        } elseif ($type === 'LINK') {
+            $url = trim((string)$request->getPost('LINK_URL'));
+            $label = trim((string)$request->getPost('LINK_LABEL'));
+            if ($label === '') $label = 'Открыть';
+
+            if ($url !== '' && !$service->isSafeUrl($url)) {
+                throw new \InvalidArgumentException('LINK URL должен быть http/https и не должен начинаться с javascript:/data:');
+            }
+
+            $set = ['url' => $url, 'label' => $label];
+
+        } else {
+            throw new \InvalidArgumentException("Неизвестный TYPE");
         }
 
-        if ($action === 'enable') {
-            $service->setBlockActive($blockId, $siteId, $pageId, true);
-            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_ENABLE', 'block', $blockId, []);
-        } elseif ($action === 'disable') {
-            $service->setBlockActive($blockId, $siteId, $pageId, false);
-            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_DISABLE', 'block', $blockId, []);
-        } elseif ($action === 'delete') {
-            $service->deleteBlock($blockId, $siteId, $pageId);
-            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_DELETE', 'block', $blockId, []);
+        if ($blockId > 0) {
+            $service->updateBlock($blockId, $siteId, (int)$page['ID'], [
+                'TYPE' => $type,
+                'TITLE' => $title,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'SETTINGS' => $set,
+            ]);
+
+            // Audit
+            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_UPDATE', 'block', $blockId, [
+                'page_id' => (int)$page['ID'],
+                'type' => $type,
+                'title' => $title,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+
+        } else {
+            $newBlockId = $service->addBlock($siteId, (int)$page['ID'], [
+                'TYPE' => $type,
+                'TITLE' => $title,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'SETTINGS' => $set,
+            ]);
+
+            // Audit
+            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_CREATE', 'block', $newBlockId, [
+                'page_id' => (int)$page['ID'],
+                'type' => $type,
+                'title' => $title,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
         }
 
-        LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$pageId);
+        LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$page['ID']);
     } catch (\Throwable $e) {
         $errors[] = $e->getMessage();
     }
 }
 
-// list
-$blocks = $service->getBlocksForPage($siteId, $pageId, false);
-
-// stats
-$totalCnt = count($blocks);
-$activeCnt = 0;
-$types = [];
-foreach ($blocks as $b) {
-    if (!empty($b['UF_ACTIVE'])) $activeCnt++;
-    $t = (string)$b['UF_TYPE'];
-    if ($t !== '') $types[$t] = true;
-}
-$offCnt = $totalCnt - $activeCnt;
-$typeList = array_keys($types);
-sort($typeList);
-
-// helpers
-function ts_decode_settings($raw): array {
-    if (is_array($raw)) return $raw;
-    $s = trim((string)$raw);
-    if ($s === '') return [];
-    $json = json_decode($s, true);
-    return is_array($json) ? $json : [];
+// значения формы (учитываем POST при ошибке)
+$typeValue = $_POST['TYPE'] ?? ($block['UF_TYPE'] ?? 'TEXT');
+$titleValue = $_POST['TITLE'] ?? ($block['UF_TITLE'] ?? '');
+$sortValue = $_POST['SORT'] ?? ($block['UF_SORT'] ?? 100);
+$activeValue = $_POST['ACTIVE'] ?? (($block && !empty($block['UF_ACTIVE'])) ? 'Y' : 'Y');
+if ($block && empty($_POST) && !$block['UF_ACTIVE']) {
+    $activeValue = 'N';
 }
 
-function ts_preview_text(string $text, int $len = 160): string {
-    $text = trim(preg_replace('~\s+~u', ' ', strip_tags($text)));
-    if (mb_strlen($text) <= $len) return $text;
-    return mb_substr($text, 0, $len) . '…';
-}
+$textHtmlValue = $_POST['TEXT_HTML'] ?? (string)($settings['html'] ?? '');
+$iframeUrlValue = $_POST['IFRAME_URL'] ?? (string)($settings['url'] ?? '');
+$iframeHeightValue = (int)($_POST['IFRAME_HEIGHT'] ?? (int)($settings['height'] ?? 600));
+
+$linkUrlValue = $_POST['LINK_URL'] ?? (string)($settings['url'] ?? '');
+$linkLabelValue = $_POST['LINK_LABEL'] ?? (string)($settings['label'] ?? 'Открыть');
+
+$APPLICATION->SetTitle($blockId > 0 ? "Редактирование блока" : "Создание блока");
 ?>
 
-<style>
-/* blocks cards */
-.ts-cards{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;}
-.ts-block{
-  width: calc(50% - 6px);
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
-  padding: 12px 14px;
-}
-@media (max-width: 980px){ .ts-block{ width:100%; } }
+<h1><?= ($blockId > 0 ? 'Редактирование' : 'Создание') ?> блока</h1>
 
-.ts-blockHead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;}
-.ts-blockTitle{margin:0;font-weight:800;font-size:15px;}
-.ts-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
-.ts-mini{font-size:12px;color:var(--muted);}
-.ts-preview{
-  border: 1px solid rgba(31,36,48,.10);
-  background: rgba(245,247,255,.45);
-  border-radius: 14px;
-  padding: 10px;
-  color: rgba(31,36,48,.92);
-  margin-bottom: 10px;
-}
-.ts-preview a{ color:#2f57ff; text-decoration:none; }
-.ts-preview a:hover{ text-decoration:underline; }
-.ts-blockFoot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
-.ts-tag{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;border:1px solid rgba(31,36,48,.12);font-size:12px;background:#fff;}
-.ts-tag .dot{width:8px;height:8px;border-radius:999px;}
-.ts-tag.ok{border-color: rgba(34,197,94,.30); background: rgba(34,197,94,.08);}
-.ts-tag.ok .dot{background: var(--ok);}
-.ts-tag.off{border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.10);}
-.ts-tag.off .dot{background: var(--warn);}
-</style>
+<p>
+    <a href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">← Назад к блокам</a>
+    &nbsp;|&nbsp;
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
+</p>
 
-<div class="ts-page">
-
-  <div class="ts-hero">
-    <div class="ts-heroTop">
-      <div>
-        <h1 class="ts-title">Блоки: <?= htmlspecialcharsbx((string)$page['UF_TITLE']) ?></h1>
-        <div class="ts-sub">
-          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b> · SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$page['UF_SLUG']) ?></span>
-        </div>
-      </div>
-
-      <div class="ts-actions">
-        <a class="ui-btn ts-ghost" href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">К страницам</a>
-        <a class="ui-btn ts-ghost" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
-        <a class="ui-btn ui-btn-icon-add ts-primary"
-           href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$pageId ?>">
-          Добавить блок
-        </a>
-      </div>
-    </div>
-
-    <div class="ts-grid">
-      <div class="ts-stat">
-        <div class="k">Всего блоков</div>
-        <div class="v"><?= (int)$totalCnt ?></div>
-        <div class="hint">на этой странице</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Активные</div>
-        <div class="v" style="color:var(--ok);"><?= (int)$activeCnt ?></div>
-        <div class="hint">рендерятся на странице</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Выключенные</div>
-        <div class="v" style="color:var(--warn);"><?= (int)$offCnt ?></div>
-        <div class="hint">скрыты</div>
-      </div>
-    </div>
-  </div>
-
-  <?php if (!empty($errors)): ?>
-    <div class="ui-alert ui-alert-danger">
-      <span class="ui-alert-message">
+<?php if (!empty($errors)): ?>
+    <div style="color:red; margin:10px 0;">
         <?php foreach ($errors as $e): ?>
-          <div><?= htmlspecialcharsbx($e) ?></div>
+            <div><?= htmlspecialcharsbx($e) ?></div>
         <?php endforeach; ?>
-      </span>
     </div>
-  <?php endif; ?>
+<?php endif; ?>
 
-  <div class="ts-toolbar">
-    <input class="ts-input" type="text" id="ts-search" placeholder="Поиск по заголовку / типу...">
+<form method="post" id="ts-block-form">
+    <?= bitrix_sessid_post() ?>
 
-    <button type="button" class="ts-chip is-active" data-filter="all">
-      <span class="ts-dot all"></span> Все <b><?= (int)$totalCnt ?></b>
-    </button>
-
-    <?php foreach ($typeList as $t): ?>
-      <button type="button" class="ts-chip" data-filter="type:<?= htmlspecialcharsbx($t) ?>">
-        <span class="ts-dot all"></span> <?= htmlspecialcharsbx($t) ?>
-      </button>
-    <?php endforeach; ?>
-
-    <button type="button" class="ts-chip" data-filter="active">
-      <span class="ts-dot ok"></span> Active <b><?= (int)$activeCnt ?></b>
-    </button>
-    <button type="button" class="ts-chip" data-filter="off">
-      <span class="ts-dot off"></span> Off <b><?= (int)$offCnt ?></b>
-    </button>
-
-    <span class="ts-pill" style="margin-left:auto;">
-      Показано: <b id="ts-count"><?= (int)$totalCnt ?></b>
-    </span>
-  </div>
-
-  <?php if (empty($blocks)): ?>
-    <div class="ui-alert ui-alert-warning">
-      <span class="ui-alert-message">Блоков пока нет.</span>
+    <div style="margin-top:10px;">
+        <label>TYPE:</label><br>
+        <select name="TYPE">
+            <option value="TEXT" <?= ($typeValue === 'TEXT' ? 'selected' : '') ?>>TEXT</option>
+            <option value="IFRAME" <?= ($typeValue === 'IFRAME' ? 'selected' : '') ?>>IFRAME</option>
+            <option value="LINK" <?= ($typeValue === 'LINK' ? 'selected' : '') ?>>LINK</option>
+        </select>
     </div>
-  <?php else: ?>
 
-    <div class="ts-cards">
-      <?php foreach ($blocks as $b): ?>
+    <div style="margin-top:10px;">
+        <label>Заголовок блока:</label><br>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Сортировка:</label><br>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>" style="width: 120px;">
+    </div>
+
+    <div style="margin-top:10px;">
+        <label>Активен:</label>
+        <select name="ACTIVE">
+            <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+            <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+    </div>
+
+    <hr>
+
+    <div style="margin-top:10px;">
+        <h3>Настройки TEXT</h3>
         <?php
-          $blockId = (int)$b['ID'];
-          $type = (string)$b['UF_TYPE'];
-          $title = (string)$b['UF_TITLE'];
-          $sort = (int)$b['UF_SORT'];
-          $isActive = !empty($b['UF_ACTIVE']);
-          $settings = ts_decode_settings($b['UF_SETTINGS']);
-
-          // preview heuristics
-          $preview = '';
-          $openLink = '';
-
-          // common guesses inside settings
-          $url = (string)($settings['url'] ?? $settings['src'] ?? $settings['href'] ?? '');
-          $text = (string)($settings['text'] ?? $settings['html'] ?? $settings['content'] ?? '');
-
-          if ($type === 'IFRAME') {
-              $openLink = $url;
-              $preview = $url !== '' ? ('<div class="ts-mini">IFRAME URL:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>') : '<span class="ts-mini">UF_SETTINGS пустой (нет url/src)</span>';
-          } elseif ($type === 'LINK') {
-              $openLink = $url;
-              $preview = $url !== '' ? ('<div class="ts-mini">Ссылка:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>') : '<span class="ts-mini">UF_SETTINGS пустой (нет url/href)</span>';
-          } else { // TEXT или любой другой
-              $previewText = $text !== '' ? ts_preview_text($text) : ts_preview_text(json_encode($settings, JSON_UNESCAPED_UNICODE));
-              $preview = '<div class="ts-mini">Превью:</div><div>'.htmlspecialcharsbx($previewText).'</div>';
-          }
-
-          $editUrl = '/local/typical_sites/block_edit.php?code=' . urlencode($code) . '&page_id=' . $pageId . '&block_id=' . $blockId;
-          $searchKey = mb_strtolower(trim($title . ' ' . $type));
+        if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+            \CFileMan::AddHTMLEditorFrame(
+                "TEXT_HTML",
+                $textHtmlValue,
+                "TEXT_HTML_TYPE",
+                "html",
+                ["height" => 260, "width" => "100%"],
+                "N"
+            );
+        } else {
+            ?>
+            <textarea name="TEXT_HTML" style="width:100%; height:260px;"><?= htmlspecialcharsbx($textHtmlValue) ?></textarea>
+            <?php
+        }
         ?>
-        <div class="ts-block"
-             data-search="<?= htmlspecialcharsbx($searchKey) ?>"
-             data-type="<?= htmlspecialcharsbx($type) ?>"
-             data-status="<?= ($isActive ? 'active' : 'off') ?>">
-
-          <div class="ts-blockHead">
-            <div>
-              <h3 class="ts-blockTitle"><?= htmlspecialcharsbx($title !== '' ? $title : ('Блок #' . $blockId)) ?></h3>
-              <div class="ts-meta">
-                <span class="ts-code"><?= htmlspecialcharsbx($type) ?></span>
-                <span class="ts-pill" style="padding:2px 10px;">
-                  SORT: <b><?= (int)$sort ?></b>
-                </span>
-              </div>
-            </div>
-
-            <button type="button"
-                    class="ui-btn ui-btn-icon-more ts-menu-btn ts-action ts-more"
-                    data-block-id="<?= (int)$blockId ?>"
-                    data-edit-url="<?= htmlspecialcharsbx($editUrl) ?>"
-                    data-open-link="<?= htmlspecialcharsbx($openLink) ?>"
-                    data-copy="<?= htmlspecialcharsbx((string)$blockId) ?>">
-            </button>
-          </div>
-
-          <div class="ts-preview"><?= $preview ?></div>
-
-          <div class="ts-blockFoot">
-            <?php if ($isActive): ?>
-              <span class="ts-tag ok"><span class="dot"></span> ACTIVE</span>
-            <?php else: ?>
-              <span class="ts-tag off"><span class="dot"></span> OFF</span>
-            <?php endif; ?>
-
-            <div class="ts-actionsRow">
-              <form method="post" style="display:inline;">
-                <?= bitrix_sessid_post() ?>
-                <input type="hidden" name="block_id" value="<?= (int)$blockId ?>">
-                <?php if ($isActive): ?>
-                  <button class="ui-btn ts-action" type="submit" name="action" value="disable">Выключить</button>
-                <?php else: ?>
-                  <button class="ui-btn ts-action" type="submit" name="action" value="enable">Включить</button>
-                <?php endif; ?>
-              </form>
-
-              <form method="post" style="display:inline;" onsubmit="return confirm('Удалить блок?');">
-                <?= bitrix_sessid_post() ?>
-                <input type="hidden" name="block_id" value="<?= (int)$blockId ?>">
-                <button class="ui-btn ts-danger" type="submit" name="action" value="delete">Удалить</button>
-              </form>
-            </div>
-          </div>
-
-        </div>
-      <?php endforeach; ?>
     </div>
 
-  <?php endif; ?>
+    <div style="margin-top:15px;">
+        <h3>Настройки IFRAME</h3>
+        <div>
+            <label>URL:</label><br>
+            <input type="text" name="IFRAME_URL" value="<?= htmlspecialcharsbx($iframeUrlValue) ?>" style="width: 100%;">
+        </div>
+        <div style="margin-top:8px;">
+            <label>Высота (px):</label><br>
+            <input type="number" name="IFRAME_HEIGHT" value="<?= (int)$iframeHeightValue ?>" style="width: 120px;">
+        </div>
+    </div>
 
-</div>
+    <div style="margin-top:15px;">
+        <h3>Настройки LINK</h3>
+        <div>
+            <label>URL:</label><br>
+            <input type="text" name="LINK_URL" value="<?= htmlspecialcharsbx($linkUrlValue) ?>" style="width: 100%;">
+        </div>
+        <div style="margin-top:8px;">
+            <label>Текст кнопки:</label><br>
+            <input type="text" name="LINK_LABEL" value="<?= htmlspecialcharsbx($linkLabelValue) ?>" style="width: 320px;">
+        </div>
+    </div>
 
-<script>
-(function(){
-  const search = document.getElementById('ts-search');
-  const cards = Array.from(document.querySelectorAll('.ts-block'));
-  const cnt = document.getElementById('ts-count');
-  const chips = Array.from(document.querySelectorAll('.ts-chip'));
-  let filter = 'all';
-
-  function apply(){
-    const q = (search.value || '').toLowerCase().trim();
-    let shown = 0;
-
-    cards.forEach(c => {
-      const key = (c.getAttribute('data-search') || '');
-      const st = (c.getAttribute('data-status') || 'off');
-      const t = (c.getAttribute('data-type') || '');
-
-      const okSearch = (q === '' || key.includes(q));
-      let okFilter = true;
-
-      if (filter === 'active') okFilter = (st === 'active');
-      else if (filter === 'off') okFilter = (st === 'off');
-      else if (filter.startsWith('type:')) okFilter = (t === filter.slice(5));
-
-      const ok = okSearch && okFilter;
-      c.style.display = ok ? '' : 'none';
-      if (ok) shown++;
-    });
-
-    if (cnt) cnt.textContent = shown;
-  }
-
-  chips.forEach(ch => {
-    ch.addEventListener('click', () => {
-      chips.forEach(x => x.classList.remove('is-active'));
-      ch.classList.add('is-active');
-      filter = ch.getAttribute('data-filter') || 'all';
-      apply();
-    });
-  });
-
-  if (search) search.addEventListener('input', apply);
-
-  function copyText(text){
-    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
-    return new Promise((resolve) => {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      resolve();
-    });
-  }
-
-  // context menu
-  if (window.BX && BX.ready) {
-    BX.ready(function(){
-      document.querySelectorAll('.ts-menu-btn').forEach(function(btn){
-        btn.addEventListener('click', function(){
-          const editUrl = btn.getAttribute('data-edit-url') || '';
-          const openLink = btn.getAttribute('data-open-link') || '';
-          const blockId = btn.getAttribute('data-block-id') || '0';
-
-          const items = [
-            { text: 'Редактировать', onclick: function(){ window.location.href = editUrl; this.popupWindow.close(); } },
-            { delimiter: true },
-            { text: 'Копировать ID', onclick: function(){ copyText(String(blockId)); this.popupWindow.close(); } },
-          ];
-
-          if (openLink) {
-            items.splice(1, 0, { text: 'Открыть ссылку', onclick: function(){ window.open(openLink, '_blank'); this.popupWindow.close(); } });
-            items.splice(2, 0, { delimiter: true });
-          }
-
-          BX.PopupMenu.show(
-            'ts_block_menu_' + blockId,
-            btn,
-            items,
-            { autoHide:true, closeByEsc:true, offsetTop:6, angle:true }
-          );
-        });
-      });
-    });
-  }
-})();
-</script>
+    <div style="margin-top:15px;">
+        <button type="submit"><?= ($blockId > 0 ? 'Сохранить' : 'Создать') ?></button>
+    </div>
+</form>
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
