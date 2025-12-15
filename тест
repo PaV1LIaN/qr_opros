@@ -1,33 +1,39 @@
-public function getBlocksForPageAll(int $siteId, int $pageId, bool $onlyActive = false, bool $includeDeleted = true): array
+public function validateSlug(string $slug): string
 {
-    $blocksClass = $this->blocksClass;
-
-    $filter = [
-        '=UF_SITE' => $siteId,
-        '=UF_PAGE' => $pageId,
-    ];
-
-    if ($onlyActive) {
-        $filter['=UF_ACTIVE'] = true;
+    $slug = trim($slug);
+    if ($slug === '') {
+        throw new \InvalidArgumentException('SLUG не может быть пустым');
     }
 
-    if (!$includeDeleted) {
-        $filter['=UF_DELETED'] = false;
+    // разрешаем a-z 0-9 - _
+    if (!preg_match('~^[a-z0-9][a-z0-9\-_]*$~', $slug)) {
+        throw new \InvalidArgumentException('SLUG должен быть в нижнем регистре и содержать только a-z, 0-9, "-" или "_"');
     }
 
-    $res = $blocksClass::getList([
-        'filter' => $filter,
-        'select' => [
-            'ID','UF_SITE','UF_PAGE','UF_TYPE','UF_TITLE','UF_SORT','UF_ACTIVE','UF_SETTINGS',
-            'UF_DELETED','UF_DELETED_AT','UF_DELETED_BY'
-        ],
-        'order' => ['UF_SORT' => 'ASC', 'ID' => 'ASC'],
-    ]);
-
-    $rows = [];
-    while ($row = $res->fetch()) {
-        $rows[] = $row;
+    // зарезервированные слова (чтобы не конфликтовать со служебными файлами)
+    $reserved = ['admin','manage','site','pages','blocks','settings','access','audit','index','api'];
+    if (in_array($slug, $reserved, true)) {
+        throw new \InvalidArgumentException('SLUG зарезервирован, выбери другой');
     }
 
-    return $rows;
+    return $slug;
+}
+
+public function isSafeUrl(string $url): bool
+{
+    $url = trim($url);
+    if ($url === '') return false;
+
+    // запрещаем очевидные инъекции
+    $lower = mb_strtolower($url);
+    if (str_starts_with($lower, 'javascript:') || str_starts_with($lower, 'data:') || str_starts_with($lower, 'vbscript:')) {
+        return false;
+    }
+
+    // разрешаем только http/https
+    $parts = parse_url($url);
+    if (!is_array($parts) || empty($parts['scheme'])) return false;
+
+    $scheme = strtolower((string)$parts['scheme']);
+    return in_array($scheme, ['http', 'https'], true);
 }
