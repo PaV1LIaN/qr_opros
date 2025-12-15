@@ -9,11 +9,13 @@ require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.p
 global $USER, $APPLICATION;
 
 $request = Context::getCurrent()->getRequest();
+
 $code = trim((string)$request->getQuery('code'));
 $pageId = (int)$request->getQuery('page_id');
+$blockId = (int)$request->getQuery('block_id');
 
-if ($code === '') {
-    ShowError("Не указан code");
+if ($code === '' || $pageId <= 0) {
+    ShowError("Не указан code или page_id");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
@@ -25,8 +27,8 @@ if (!$USER->IsAuthorized()) {
 }
 
 $service = new \Cc10\SiteService();
-$site = $service->getSiteByCode($code);
 
+$site = $service->getSiteByCode($code);
 if (!$site) {
     ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
@@ -36,101 +38,142 @@ if (!$site) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на редактирование страниц");
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
+    ShowError("Нет прав на редактирование блоков");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$page = $service->getPageById($pageId);
+if (!$page || (int)$page['UF_SITE'] !== $siteId) {
+    ShowError("Страница не найдена или не принадлежит этому сайту");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 $errors = [];
-$page = null;
+$block = null;
 
-if ($pageId > 0) {
-    $page = $service->getPageById($pageId);
-    if (!$page) {
-        $errors[] = "Страница не найдена";
-        $pageId = 0;
-    } elseif ((int)$page['UF_SITE'] !== $siteId) {
-        $errors[] = "Страница не принадлежит этому сайту";
-        $page = null;
-        $pageId = 0;
+if ($blockId > 0) {
+    $block = $service->getBlockById($blockId);
+    if (!$block) {
+        $errors[] = "Блок не найден";
+        $blockId = 0;
+    } elseif ((int)$block['UF_SITE'] !== $siteId || (int)$block['UF_PAGE'] !== (int)$page['ID']) {
+        $errors[] = "Блок не принадлежит этой странице/сайту";
+        $block = null;
+        $blockId = 0;
     }
 }
 
+$settings = $block ? $service->decodeSettings((string)$block['UF_SETTINGS']) : [];
+
 if ($request->isPost() && check_bitrix_sessid()) {
+    $type = strtoupper(trim((string)$request->getPost('TYPE')));
     $title = (string)$request->getPost('TITLE');
-    $slug  = (string)$request->getPost('SLUG');
-    $sort  = (int)$request->getPost('SORT');
+    $sort = (int)$request->getPost('SORT');
     $active = ($request->getPost('ACTIVE') === 'Y');
 
-    // CONTENT может прийти из html-редактора или textarea
-    $content = (string)$request->getPost('CONTENT');
-
     try {
-        // SLUG: нормализуем + валидируем
-        $slug = mb_strtolower(trim($slug));
-        $slug = $service->validateSlug($slug);
+        // SETTINGS по типу
+        if ($type === 'TEXT') {
+            $html = (string)$request->getPost('TEXT_HTML');
+            $set = ['html' => $html];
 
-        if ($pageId > 0) {
-            $service->updatePage($pageId, $siteId, [
+        } elseif ($type === 'IFRAME') {
+            $url = trim((string)$request->getPost('IFRAME_URL'));
+            $height = (int)$request->getPost('IFRAME_HEIGHT');
+            if ($height <= 200) $height = 600;
+
+            if ($url !== '' && !$service->isSafeUrl($url)) {
+                throw new \InvalidArgumentException('IFRAME URL должен быть http/https и не должен начинаться с javascript:/data:');
+            }
+
+            $set = ['url' => $url, 'height' => $height];
+
+        } elseif ($type === 'LINK') {
+            $url = trim((string)$request->getPost('LINK_URL'));
+            $label = trim((string)$request->getPost('LINK_LABEL'));
+            if ($label === '') $label = 'Открыть';
+
+            if ($url !== '' && !$service->isSafeUrl($url)) {
+                throw new \InvalidArgumentException('LINK URL должен быть http/https и не должен начинаться с javascript:/data:');
+            }
+
+            $set = ['url' => $url, 'label' => $label];
+
+        } else {
+            throw new \InvalidArgumentException("Неизвестный TYPE");
+        }
+
+        if ($blockId > 0) {
+            $service->updateBlock($blockId, $siteId, (int)$page['ID'], [
+                'TYPE' => $type,
                 'TITLE' => $title,
-                'SLUG' => $slug,
                 'SORT' => $sort,
                 'ACTIVE' => $active,
-                'CONTENT' => $content,
+                'SETTINGS' => $set,
             ]);
 
             // Audit
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
+            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_UPDATE', 'block', $blockId, [
+                'page_id' => (int)$page['ID'],
+                'type' => $type,
                 'title' => $title,
-                'slug' => $slug,
                 'sort' => $sort,
                 'active' => $active,
             ]);
+
         } else {
-            $newPageId = $service->addPage($siteId, [
+            $newBlockId = $service->addBlock($siteId, (int)$page['ID'], [
+                'TYPE' => $type,
                 'TITLE' => $title,
-                'SLUG' => $slug,
                 'SORT' => $sort,
                 'ACTIVE' => $active,
-                'CONTENT' => $content,
+                'SETTINGS' => $set,
             ]);
 
             // Audit
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
+            $service->logAction($siteId, (int)$USER->GetID(), 'BLOCK_CREATE', 'block', $newBlockId, [
+                'page_id' => (int)$page['ID'],
+                'type' => $type,
                 'title' => $title,
-                'slug' => $slug,
                 'sort' => $sort,
                 'active' => $active,
             ]);
         }
 
-        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
+        LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$page['ID']);
     } catch (\Throwable $e) {
         $errors[] = $e->getMessage();
     }
 }
 
-// значения для формы (учитываем POST при ошибке)
-$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
-$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
-$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
-$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
-if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
+// значения формы (учитываем POST при ошибке)
+$typeValue = $_POST['TYPE'] ?? ($block['UF_TYPE'] ?? 'TEXT');
+$titleValue = $_POST['TITLE'] ?? ($block['UF_TITLE'] ?? '');
+$sortValue = $_POST['SORT'] ?? ($block['UF_SORT'] ?? 100);
+$activeValue = $_POST['ACTIVE'] ?? (($block && !empty($block['UF_ACTIVE'])) ? 'Y' : 'Y');
+if ($block && empty($_POST) && !$block['UF_ACTIVE']) {
     $activeValue = 'N';
 }
-$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
 
-$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
+$textHtmlValue = $_POST['TEXT_HTML'] ?? (string)($settings['html'] ?? '');
+$iframeUrlValue = $_POST['IFRAME_URL'] ?? (string)($settings['url'] ?? '');
+$iframeHeightValue = (int)($_POST['IFRAME_HEIGHT'] ?? (int)($settings['height'] ?? 600));
+
+$linkUrlValue = $_POST['LINK_URL'] ?? (string)($settings['url'] ?? '');
+$linkLabelValue = $_POST['LINK_LABEL'] ?? (string)($settings['label'] ?? 'Открыть');
+
+$APPLICATION->SetTitle($blockId > 0 ? "Редактирование блока" : "Создание блока");
 ?>
 
-<h1><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы (<?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>)</h1>
+<h1><?= ($blockId > 0 ? 'Редактирование' : 'Создание') ?> блока</h1>
 
 <p>
-    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">← Назад к страницам</a>
+    <a href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$page['ID'] ?>">← Назад к блокам</a>
     &nbsp;|&nbsp;
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
+    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
 </p>
 
 <?php if (!empty($errors)): ?>
@@ -141,18 +184,21 @@ $APPLICATION->SetTitle($pageId > 0 ? "Редактирование страни�
     </div>
 <?php endif; ?>
 
-<form method="post">
+<form method="post" id="ts-block-form">
     <?= bitrix_sessid_post() ?>
 
     <div style="margin-top:10px;">
-        <label>Заголовок:</label><br>
-        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
+        <label>TYPE:</label><br>
+        <select name="TYPE">
+            <option value="TEXT" <?= ($typeValue === 'TEXT' ? 'selected' : '') ?>>TEXT</option>
+            <option value="IFRAME" <?= ($typeValue === 'IFRAME' ? 'selected' : '') ?>>IFRAME</option>
+            <option value="LINK" <?= ($typeValue === 'LINK' ? 'selected' : '') ?>>LINK</option>
+        </select>
     </div>
 
     <div style="margin-top:10px;">
-        <label>SLUG (часть URL):</label><br>
-        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" style="width: 240px;">
-        <small>латиница/цифры/ - _ (например: about)</small>
+        <label>Заголовок блока:</label><br>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" style="width: 480px;">
     </div>
 
     <div style="margin-top:10px;">
@@ -161,42 +207,61 @@ $APPLICATION->SetTitle($pageId > 0 ? "Редактирование страни�
     </div>
 
     <div style="margin-top:10px;">
-        <label>Активна:</label>
+        <label>Активен:</label>
         <select name="ACTIVE">
             <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
             <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
         </select>
     </div>
 
-    <div style="margin-top:12px;">
-        <label>Контент (HTML):</label><br>
+    <hr>
 
+    <div style="margin-top:10px;">
+        <h3>Настройки TEXT</h3>
         <?php
         if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
             \CFileMan::AddHTMLEditorFrame(
-                "CONTENT",
-                $contentValue,
-                "CONTENT_TYPE",
+                "TEXT_HTML",
+                $textHtmlValue,
+                "TEXT_HTML_TYPE",
                 "html",
-                ["height" => 320, "width" => "100%"],
-                "N",
-                0,
-                "",
-                "",
-                false,
-                true,
-                true
+                ["height" => 260, "width" => "100%"],
+                "N"
             );
         } else {
             ?>
-            <textarea name="CONTENT" style="width:100%; height:320px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
+            <textarea name="TEXT_HTML" style="width:100%; height:260px;"><?= htmlspecialcharsbx($textHtmlValue) ?></textarea>
             <?php
         }
         ?>
     </div>
 
     <div style="margin-top:15px;">
-        <button type="submit"><?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?></button>
+        <h3>Настройки IFRAME</h3>
+        <div>
+            <label>URL:</label><br>
+            <input type="text" name="IFRAME_URL" value="<?= htmlspecialcharsbx($iframeUrlValue) ?>" style="width: 100%;">
+        </div>
+        <div style="margin-top:8px;">
+            <label>Высота (px):</label><br>
+            <input type="number" name="IFRAME_HEIGHT" value="<?= (int)$iframeHeightValue ?>" style="width: 120px;">
+        </div>
+    </div>
+
+    <div style="margin-top:15px;">
+        <h3>Настройки LINK</h3>
+        <div>
+            <label>URL:</label><br>
+            <input type="text" name="LINK_URL" value="<?= htmlspecialcharsbx($linkUrlValue) ?>" style="width: 100%;">
+        </div>
+        <div style="margin-top:8px;">
+            <label>Текст кнопки:</label><br>
+            <input type="text" name="LINK_LABEL" value="<?= htmlspecialcharsbx($linkLabelValue) ?>" style="width: 320px;">
+        </div>
+    </div>
+
+    <div style="margin-top:15px;">
+        <button type="submit"><?= ($blockId > 0 ? 'Сохранить' : 'Создать') ?></button>
     </div>
 </form>
 
