@@ -1,160 +1,183 @@
 <?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
-$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/style.css");
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 
 use Bitrix\Main\Context;
-
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+use Bitrix\Main\UI\Extension;
 
 global $USER, $APPLICATION;
 
-$request = Context::getCurrent()->getRequest();
+$APPLICATION->SetTitle("Админка типовых сайтов");
 
-$code = trim((string)$request->getQuery('code'));
-if ($code === '') {
-    ShowError("Не указан code");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+// Bitrix UI
+Extension::load([
+    "ui.buttons",
+    "ui.alerts",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
+
+if (!$USER->IsAdmin()) {
+    ShowError("Доступ запрещён");
+    require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
     exit;
 }
 
-if (!$USER->IsAuthorized()) {
-    ShowError("Требуется авторизация");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 $service = new \Cc10\SiteService();
-$site = $service->getSiteByCode($code);
 
-if (!$site) {
-    ShowError("Сайт не найден или не активен");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$siteId = (int)$site['ID'];
-$role = $service->getUserRole((int)$USER->GetID(), $siteId);
-
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на управление страницами");
-    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
-    exit;
-}
-
-$APPLICATION->SetTitle("Страницы: " . (string)$site['UF_NAME']);
-
+$request = Context::getCurrent()->getRequest();
 $errors = [];
 
-// действия: удалить/восстановить (если у тебя soft delete уже внедрён)
+// действия (POST)
 if ($request->isPost() && check_bitrix_sessid()) {
     $action = (string)$request->getPost('action');
-    $pageId = (int)$request->getPost('page_id');
+    $siteId = (int)$request->getPost('site_id');
 
     try {
-        if ($pageId > 0 && $action === 'delete') {
-            // если у тебя нет softDeletePage — замени на deletePage (но лучше soft)
-            if (method_exists($service, 'softDeletePage')) {
-                $service->softDeletePage($pageId, $siteId, (int)$USER->GetID());
-                $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => true]);
-            } else {
-                $service->deletePage($pageId, $siteId);
-                $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => false]);
-            }
-        } elseif ($pageId > 0 && $action === 'restore') {
-            if (method_exists($service, 'restorePage')) {
-                $service->restorePage($pageId, $siteId);
-                $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_RESTORE', 'page', $pageId, []);
-            }
+        if ($action === 'disable') {
+            $service->setActive($siteId, false);
+        } elseif ($action === 'enable') {
+            $service->setActive($siteId, true);
+        } elseif ($action === 'delete') {
+            $service->deleteSite($siteId);
         }
-
-        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
+        LocalRedirect('/local/typical_sites/admin.php');
     } catch (\Throwable $e) {
         $errors[] = $e->getMessage();
     }
 }
 
-$pages = $service->getPagesForSite($siteId, true);
+$sites = $service->getAllSites();
+$activeCnt = 0;
+foreach ($sites as $s) {
+    if (!empty($s['UF_ACTIVE'])) $activeCnt++;
+}
+$totalCnt = count($sites);
+
+// немного CSS прямо здесь (чтобы не зависеть от файла)
 ?>
+<style>
+.ts-container{max-width:1200px;margin:0 auto;padding:12px 14px;}
+.ts-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:10px 0 14px;}
+.ts-head h1{margin:0;font-size:22px;}
+.ts-sub{color:#6b6b6b;margin-top:2px;font-size:13px;}
+.ts-cards{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 14px;}
+.ts-card{background:#fff;border:1px solid #e6e6e6;border-radius:14px;padding:12px 14px;min-width:220px;}
+.ts-card .v{font-size:22px;font-weight:700;margin-top:2px;}
+.ts-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 12px;}
+.ts-input{height:36px;border:1px solid #d5d5d5;border-radius:10px;padding:0 12px;min-width:280px;}
+.ts-tableWrap{background:#fff;border:1px solid #e6e6e6;border-radius:14px;overflow:hidden;}
+.ts-table{width:100%;border-collapse:collapse;}
+.ts-table th{background:#fafafa;text-align:left;padding:12px 10px;border-bottom:1px solid #eee;font-weight:600;}
+.ts-table td{padding:12px 10px;border-bottom:1px solid #f0f0f0;vertical-align:top;}
+.ts-table tr:hover td{background:#fcfcfc;}
+.ts-badge{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:2px 8px;font-size:12px;}
+.ts-muted{color:#777;}
+.ts-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.ts-url{word-break:break-all;}
+</style>
 
-<div class="ts-wrap">
+<div class="ts-container">
 
-  <div class="ts-header">
-    <h1 class="ts-title">Страницы: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
-    <div class="ts-row">
-      <a class="ts-btn" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
-      <a class="ts-btn" href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>">+ Создать страницу</a>
+  <div class="ts-head">
+    <div>
+      <h1>Администрирование типовых сайтов</h1>
+      <div class="ts-sub">Управление сайтами, доступами и страницами</div>
+    </div>
+
+    <div class="ts-actions">
+      <a class="ui-btn ui-btn-primary ui-btn-icon-add" href="/local/typical_sites/manage.php">Создать сайт</a>
     </div>
   </div>
 
-  <div class="ts-nav">
-    <a href="/local/typical_sites/admin.php">Сайты</a>
-    <a href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">Страницы</a>
-    <a href="/local/typical_sites/access_manage.php?code=<?= urlencode($code) ?>">Доступы</a>
-    <a href="/local/typical_sites/audit.php?code=<?= urlencode($code) ?>">Логи</a>
-    <a href="/local/typical_sites/settings.php?code=<?= urlencode($code) ?>">Настройки</a>
-  </div>
-
-  <div class="ts-card">
-    <div class="ts-row">
-      <label>Поиск:</label>
-      <input class="ts-input" type="text" id="ts-search" placeholder="Заголовок или SLUG..." style="width:300px;">
-      <span class="ts-badge" id="ts-count"><?= count($pages) ?></span>
+  <div class="ts-cards">
+    <div class="ts-card">
+      <div class="ts-muted">Всего сайтов</div>
+      <div class="v"><?= (int)$totalCnt ?></div>
+    </div>
+    <div class="ts-card">
+      <div class="ts-muted">Активные</div>
+      <div class="v"><?= (int)$activeCnt ?></div>
+    </div>
+    <div class="ts-card">
+      <div class="ts-muted">Неактивные</div>
+      <div class="v"><?= (int)($totalCnt - $activeCnt) ?></div>
     </div>
   </div>
 
   <?php if (!empty($errors)): ?>
-    <div class="ts-error ts-card">
-      <?php foreach ($errors as $e): ?>
-        <div><?= htmlspecialcharsbx($e) ?></div>
-      <?php endforeach; ?>
+    <div class="ui-alert ui-alert-danger">
+      <span class="ui-alert-message">
+        <?php foreach ($errors as $e): ?>
+          <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+      </span>
     </div>
   <?php endif; ?>
 
-  <?php if (empty($pages)): ?>
-    <div class="ts-card">Страниц пока нет.</div>
+  <div class="ts-tools">
+    <input class="ts-input" type="text" id="ts-search" placeholder="Поиск по названию или CODE...">
+    <span class="ts-badge">Показано: <b id="ts-count"><?= (int)$totalCnt ?></b></span>
+  </div>
+
+  <?php if (empty($sites)): ?>
+    <div class="ui-alert ui-alert-warning">
+      <span class="ui-alert-message">Сайтов пока нет.</span>
+    </div>
   <?php else: ?>
-    <div class="ts-card">
+    <div class="ts-tableWrap">
       <table class="ts-table">
         <thead>
           <tr>
             <th style="width:70px;">ID</th>
-            <th>Заголовок</th>
-            <th style="width:180px;">SLUG</th>
-            <th style="width:80px;">SORT</th>
-            <th style="width:90px;">Активна</th>
-            <th style="width:320px;">Действия</th>
+            <th>Название</th>
+            <th style="width:170px;">CODE</th>
+            <th>URL</th>
+            <th style="width:110px;">Статус</th>
+            <th style="width:360px;">Действия</th>
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($pages as $p): ?>
+          <?php foreach ($sites as $s): ?>
             <?php
-              $slug = (string)$p['UF_SLUG'];
-              $isActive = !empty($p['UF_ACTIVE']);
-              $openUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode($slug);
-              $searchKey = mb_strtolower(trim((string)$p['UF_TITLE'] . ' ' . $slug));
+              $code = (string)$s['UF_CODE'];
+              $url = '/local/typical_sites/site.php?code=' . urlencode($code);
+              $isActive = !empty($s['UF_ACTIVE']);
+              $searchKey = mb_strtolower(trim((string)$s['UF_NAME'] . ' ' . $code));
             ?>
-            <tr class="ts-page-row" data-search="<?= htmlspecialcharsbx($searchKey) ?>">
-              <td><?= (int)$p['ID'] ?></td>
-              <td><?= htmlspecialcharsbx((string)$p['UF_TITLE']) ?></td>
-              <td><span class="ts-badge"><?= htmlspecialcharsbx($slug) ?></span></td>
-              <td><?= (int)$p['UF_SORT'] ?></td>
+            <tr class="ts-row" data-search="<?= htmlspecialcharsbx($searchKey) ?>">
+              <td><?= (int)$s['ID'] ?></td>
+              <td><?= htmlspecialcharsbx((string)$s['UF_NAME']) ?></td>
+              <td><span class="ts-badge"><?= htmlspecialcharsbx($code) ?></span></td>
+              <td class="ts-url"><a href="<?= htmlspecialcharsbx($url) ?>" target="_blank"><?= htmlspecialcharsbx($url) ?></a></td>
               <td>
                 <?php if ($isActive): ?>
-                  <span class="ts-badge ts-badge-ok">Y</span>
+                  <span class="ts-badge" style="border-color:#bfe7c8;">ACTIVE</span>
                 <?php else: ?>
-                  <span class="ts-badge ts-badge-off">N</span>
+                  <span class="ts-badge" style="border-color:#f0d1a8;">OFF</span>
                 <?php endif; ?>
               </td>
               <td>
-                <a class="ts-btn" href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Редактировать</a>
-                <a class="ts-btn" href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$p['ID'] ?>">Блоки</a>
-                <a class="ts-btn" href="<?= htmlspecialcharsbx($openUrl) ?>" target="_blank">Открыть</a>
+                <div class="ts-actions">
+                  <a class="ui-btn ui-btn-light-border" href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">Страницы</a>
+                  <a class="ui-btn ui-btn-light-border" href="/local/typical_sites/access_manage.php?code=<?= urlencode($code) ?>">Доступы</a>
 
-                <form method="post" style="display:inline;" onsubmit="return confirm('Удалить страницу?');">
-                  <?= bitrix_sessid_post() ?>
-                  <input type="hidden" name="page_id" value="<?= (int)$p['ID'] ?>">
-                  <button class="ts-btn ts-btn-danger" type="submit" name="action" value="delete">Удалить</button>
-                </form>
+                  <form method="post" style="display:inline;">
+                    <?= bitrix_sessid_post() ?>
+                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                    <?php if ($isActive): ?>
+                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="disable">Выключить</button>
+                    <?php else: ?>
+                      <button class="ui-btn ui-btn-light-border" type="submit" name="action" value="enable">Включить</button>
+                    <?php endif; ?>
+                  </form>
+
+                  <form method="post" style="display:inline;" onsubmit="return confirm('Точно удалить сайт?');">
+                    <?= bitrix_sessid_post() ?>
+                    <input type="hidden" name="site_id" value="<?= (int)$s['ID'] ?>">
+                    <button class="ui-btn ui-btn-danger ui-btn-light-border" type="submit" name="action" value="delete">Удалить</button>
+                  </form>
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
@@ -162,14 +185,13 @@ $pages = $service->getPagesForSite($siteId, true);
       </table>
     </div>
   <?php endif; ?>
-
 </div>
 
 <script>
 (function(){
   const input = document.getElementById('ts-search');
-  const rows = document.querySelectorAll('.ts-page-row');
-  const badge = document.getElementById('ts-count');
+  const rows = document.querySelectorAll('tr.ts-row');
+  const cnt = document.getElementById('ts-count');
 
   function apply(){
     const q = (input.value || '').toLowerCase().trim();
@@ -180,7 +202,7 @@ $pages = $service->getPagesForSite($siteId, true);
       r.style.display = ok ? '' : 'none';
       if (ok) shown++;
     });
-    if (badge) badge.textContent = shown;
+    if (cnt) cnt.textContent = shown;
   }
 
   if (input) input.addEventListener('input', apply);
@@ -188,4 +210,4 @@ $pages = $service->getPagesForSite($siteId, true);
 </script>
 
 <?php
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+require($_SERVER["DOCUMENT_ROOT"]."/bitrix/footer.php");
