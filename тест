@@ -1,39 +1,5 @@
-public function validateSlug(string $slug): string
-{
-    $slug = trim($slug);
-    if ($slug === '') {
-        throw new \InvalidArgumentException('SLUG не может быть пустым');
-    }
-
-    // разрешаем a-z 0-9 - _
-    if (!preg_match('~^[a-z0-9][a-z0-9\-_]*$~', $slug)) {
-        throw new \InvalidArgumentException('SLUG должен быть в нижнем регистре и содержать только a-z, 0-9, "-" или "_"');
-    }
-
-    // зарезервированные слова (чтобы не конфликтовать со служебными файлами)
-    $reserved = ['admin','manage','site','pages','blocks','settings','access','audit','index','api'];
-    if (in_array($slug, $reserved, true)) {
-        throw new \InvalidArgumentException('SLUG зарезервирован, выбери другой');
-    }
-
-    return $slug;
-}
-
-public function isSafeUrl(string $url): bool
-{
-    $url = trim($url);
-    if ($url === '') return false;
-
-    // запрещаем очевидные инъекции
-    $lower = mb_strtolower($url);
-    if (str_starts_with($lower, 'javascript:') || str_starts_with($lower, 'data:') || str_starts_with($lower, 'vbscript:')) {
-        return false;
-    }
-
-    // разрешаем только http/https
-    $parts = parse_url($url);
-    if (!is_array($parts) || empty($parts['scheme'])) return false;
-
-    $scheme = strtolower((string)$parts['scheme']);
-    return in_array($scheme, ['http', 'https'], true);
+try {
+    $slug = $service->validateSlug(mb_strtolower($slug));
+} catch (\Throwable $e) {
+    $errors[] = $e->getMessage();
 }
