@@ -1,28 +1,8 @@
-$entity = (string)($r['UF_ENTITY'] ?? '');
-$entityId = (int)($r['UF_ENTITY_ID'] ?? 0);
-
-$link = '';
-$linkText = '';
-
-$decoded = [];
-if ($data !== '') {
-    $tmp = json_decode($data, true);
-    if (is_array($tmp)) $decoded = $tmp;
-}
-
-if ($entity === 'page' && $entityId > 0) {
-    $link = '/local/typical_sites/page_edit.php?code=' . urlencode($code) . '&page_id=' . $entityId;
-    $linkText = 'Открыть страницу';
-} elseif ($entity === 'block' && $entityId > 0) {
-    $pid = (int)($decoded['page_id'] ?? 0);
-    if ($pid > 0) {
-        $link = '/local/typical_sites/block_edit.php?code=' . urlencode($code) . '&page_id=' . $pid . '&block_id=' . $entityId;
-        $linkText = 'Открыть блок';
-    }
-} elseif ($entity === 'access') {
-    $link = '/local/typical_sites/access_manage.php?code=' . urlencode($code);
-    $linkText = 'Открыть доступы';
-} elseif ($entity === 'site') {
-    $link = '/local/typical_sites/settings.php?code=' . urlencode($code);
-    $linkText = 'Открыть настройки';
-}
+<td>
+    <?php if ($link !== ''): ?>
+        <a href="<?= htmlspecialcharsbx($link) ?>"><?= (int)$r['UF_ENTITY_ID'] ?></a>
+        <div><small><?= htmlspecialcharsbx($linkText) ?></small></div>
+    <?php else: ?>
+        <?= (int)$r['UF_ENTITY_ID'] ?>
+    <?php endif; ?>
+</td>
