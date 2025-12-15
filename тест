@@ -1,8 +1,79 @@
-<td>
-    <?php if ($link !== ''): ?>
-        <a href="<?= htmlspecialcharsbx($link) ?>"><?= (int)$r['UF_ENTITY_ID'] ?></a>
-        <div><small><?= htmlspecialcharsbx($linkText) ?></small></div>
-    <?php else: ?>
-        <?= (int)$r['UF_ENTITY_ID'] ?>
-    <?php endif; ?>
-</td>
+public function softDeletePage(int $pageId, int $siteId, int $userId): void
+{
+    $pagesClass = $this->pagesClass;
+
+    $row = $pagesClass::getById($pageId)->fetch();
+    if (!$row || (int)$row['UF_SITE'] !== $siteId) {
+        throw new \RuntimeException('Страница не найдена или не принадлежит сайту');
+    }
+
+    $res = $pagesClass::update($pageId, [
+        'UF_DELETED' => true,
+        'UF_DELETED_AT' => new \Bitrix\Main\Type\DateTime(),
+        'UF_DELETED_BY' => $userId,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось удалить страницу: ' . implode(', ', $res->getErrorMessages()));
+    }
+}
+
+public function restorePage(int $pageId, int $siteId): void
+{
+    $pagesClass = $this->pagesClass;
+
+    $row = $pagesClass::getById($pageId)->fetch();
+    if (!$row || (int)$row['UF_SITE'] !== $siteId) {
+        throw new \RuntimeException('Страница не найдена или не принадлежит сайту');
+    }
+
+    $res = $pagesClass::update($pageId, [
+        'UF_DELETED' => false,
+        'UF_DELETED_AT' => null,
+        'UF_DELETED_BY' => null,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось восстановить страницу: ' . implode(', ', $res->getErrorMessages()));
+    }
+}
+
+public function softDeleteBlock(int $blockId, int $siteId, int $pageId, int $userId): void
+{
+    $blocksClass = $this->blocksClass;
+
+    $row = $blocksClass::getById($blockId)->fetch();
+    if (!$row || (int)$row['UF_SITE'] !== $siteId || (int)$row['UF_PAGE'] !== $pageId) {
+        throw new \RuntimeException('Блок не найден или не принадлежит странице/сайту');
+    }
+
+    $res = $blocksClass::update($blockId, [
+        'UF_DELETED' => true,
+        'UF_DELETED_AT' => new \Bitrix\Main\Type\DateTime(),
+        'UF_DELETED_BY' => $userId,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось удалить блок: ' . implode(', ', $res->getErrorMessages()));
+    }
+}
+
+public function restoreBlock(int $blockId, int $siteId, int $pageId): void
+{
+    $blocksClass = $this->blocksClass;
+
+    $row = $blocksClass::getById($blockId)->fetch();
+    if (!$row || (int)$row['UF_SITE'] !== $siteId || (int)$row['UF_PAGE'] !== $pageId) {
+        throw new \RuntimeException('Блок не найден или не принадлежит странице/сайту');
+    }
+
+    $res = $blocksClass::update($blockId, [
+        'UF_DELETED' => false,
+        'UF_DELETED_AT' => null,
+        'UF_DELETED_BY' => null,
+    ]);
+
+    if (!$res->isSuccess()) {
+        throw new \RuntimeException('Не удалось восстановить блок: ' . implode(', ', $res->getErrorMessages()));
+    }
+}
