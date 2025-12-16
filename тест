@@ -45,9 +45,7 @@ if (!$site || empty($site['UF_ACTIVE'])) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-// На сайт пускаем:
-// - глобального администратора
-// - или тех, у кого есть роль VIEWER/ADMIN/DEVELOPER на этом сайте
+// на сайт пускаем: глоб. админ или VIEWER / ADMIN / DEVELOPER этого сайта
 if (
     !$USER->IsAdmin()
     && !in_array($role, ['VIEWER', 'ADMIN', 'DEVELOPER'], true)
@@ -57,14 +55,14 @@ if (
     exit;
 }
 
-// активные страницы сайта
+// только активные страницы (для сайта)
 $pages = $service->getPagesForSite($siteId, true);
 
 // выбираем текущую страницу
 $currentPage = null;
 if (!empty($pages)) {
-    // если page не передан — пытаемся найти 'index', иначе берём первую по списку
     if ($pageSlug === '') {
+        // пробуем index, иначе первая
         foreach ($pages as $p) {
             if ((string)$p['UF_SLUG'] === 'index') {
                 $currentPage = $p;
@@ -82,22 +80,21 @@ if (!empty($pages)) {
             }
         }
         if (!$currentPage) {
-            // fallback — первая страница
             $currentPage = $pages[0];
         }
     }
 }
 
 $APPLICATION->SetTitle((string)$site['UF_NAME']);
-
 ?>
+
 <style>
-/* layout для просмотра сайта */
-.ts-site-wrapper{
+.ts-site-wrap{
   max-width: 1100px;
   margin: 0 auto;
-  padding: 0 12px 32px;
+  padding: 0 12px 24px;
 }
+
 .ts-site-header{
   padding: 18px 0 10px;
   display:flex;
@@ -106,11 +103,12 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
   gap:12px;
 }
 .ts-site-title{
+  margin:0;
   font-size:24px;
   font-weight:800;
-  margin:0;
 }
 .ts-site-sub{
+  margin-top:4px;
   font-size:13px;
   color:var(--muted);
 }
@@ -120,11 +118,29 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
   flex-wrap:wrap;
   justify-content:flex-end;
 }
+
+.ts-role-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border-radius:999px;
+  padding:3px 9px;
+  font-size:11px;
+  border:1px solid rgba(31,36,48,.16);
+  background:#fff;
+}
+.ts-role-badge .dot{
+  width:7px;height:7px;border-radius:999px;
+}
+.ts-role-badge.viewer .dot{background:#3b82f6;}
+.ts-role-badge.admin .dot{background:#f59e0b;}
+.ts-role-badge.developer .dot{background:#8b5cf6;}
+
 .ts-site-tabs{
   display:flex;
   flex-wrap:wrap;
   gap:6px;
-  margin:12px 0 16px;
+  margin:8px 0 14px;
   border-bottom:1px solid rgba(231,233,242,.9);
   padding-bottom:4px;
 }
@@ -148,29 +164,27 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
   margin-left:4px;
 }
 
-.ts-site-main{
-  display:grid;
-  grid-template-columns: minmax(0,1.9fr) minmax(0,1.1fr);
-  gap:18px;
-}
-@media (max-width: 980px){
-  .ts-site-main{grid-template-columns:1fr;}
-}
-
-.ts-site-content{
+.ts-site-card{
   background:#ffffff;
   border-radius:18px;
   border:1px solid var(--line);
   box-shadow:var(--shadow);
   padding:16px 18px;
 }
-.ts-site-content h2{
-  margin-top:0;
+
+.ts-site-empty{
+  padding:18px;
+  border-radius:16px;
+  border:1px dashed rgba(148,163,184,.8);
+  background:rgba(248,250,252,.9);
+  font-size:13px;
 }
+
 .ts-site-blocks{
   display:flex;
   flex-direction:column;
   gap:12px;
+  margin-top:12px;
 }
 .ts-site-block{
   border-radius:14px;
@@ -185,39 +199,12 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
   margin-bottom:6px;
 }
 
-.ts-site-panel{
-  background:rgba(248,249,255,.98);
-  border-radius:18px;
-  border:1px solid rgba(31,36,48,.06);
-  padding:14px;
-}
-.ts-site-panel-title{
-  font-size:13px;
-  font-weight:700;
-  margin-bottom:8px;
-}
-.ts-site-panel ul{
-  margin:0;
-  padding-left:18px;
-  font-size:13px;
-  color:var(--muted);
-}
-.ts-site-empty{
-  padding:18px;
-  border-radius:16px;
-  border:1px dashed rgba(148,163,184,.8);
-  background:rgba(248,250,252,.9);
-  font-size:13px;
-}
-
-/* iframe */
 .ts-site-iframe{
   width:100%;
   border-radius:12px;
   border:1px solid rgba(148,163,184,.6);
 }
 
-/* ссылка-блок */
 .ts-site-link-btn{
   display:inline-flex;
   align-items:center;
@@ -232,27 +219,9 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
 .ts-site-link-btn:hover{
   background:rgba(37,99,235,.12);
 }
-
-/* badge ролей */
-.ts-role-badge{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  border-radius:999px;
-  padding:4px 9px;
-  font-size:11px;
-  border:1px solid rgba(31,36,48,.16);
-  background:#fff;
-}
-.ts-role-badge .dot{
-  width:7px;height:7px;border-radius:999px;
-}
-.ts-role-badge.viewer .dot{background:#3b82f6;}
-.ts-role-badge.admin .dot{background:#f59e0b;}
-.ts-role-badge.developer .dot{background:#8b5cf6;}
 </style>
 
-<div class="ts-site-wrapper">
+<div class="ts-site-wrap">
 
   <div class="ts-site-header">
     <div>
@@ -282,11 +251,13 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
 
   <?php if (empty($pages)): ?>
 
-    <div class="ts-site-empty">
-      У этого сайта пока нет активных страниц.
-      <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
-        <br>Перейдите в раздел <b>Страницы</b>, чтобы создать первую страницу.
-      <?php endif; ?>
+    <div class="ts-site-card">
+      <div class="ts-site-empty">
+        У этого сайта пока нет активных страниц.
+        <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+          <br>Перейдите в раздел <b>Страницы</b>, чтобы создать первую страницу.
+        <?php endif; ?>
+      </div>
     </div>
 
   <?php else: ?>
@@ -308,119 +279,105 @@ $APPLICATION->SetTitle((string)$site['UF_NAME']);
     </div>
 
     <?php
-    // Рендер текущей страницы + блоков
     $blocks = [];
     if ($currentPage) {
+        // третьим параметром берём только активные блоки (если сигнатура: $onlyActive = true)
         $blocks = $service->getBlocksForPage($siteId, (int)$currentPage['ID'], true);
     }
     ?>
 
-    <div class="ts-site-main">
-      <div class="ts-site-content">
-        <?php if ($currentPage): ?>
-          <h2><?= htmlspecialcharsbx((string)$currentPage['UF_TITLE']) ?></h2>
+    <div class="ts-site-card">
+      <?php if ($currentPage): ?>
+        <h2 style="margin-top:0;"><?= htmlspecialcharsbx((string)$currentPage['UF_TITLE']) ?></h2>
 
-          <?php if (!empty($currentPage['UF_CONTENT'])): ?>
-            <div class="ts-site-block">
-              <div class="ts-site-block-title">Контент страницы</div>
-              <div>
-                <?= $currentPage['UF_CONTENT'] // HTML уже от админа, не экранируем ?>
+        <?php if (!empty($currentPage['UF_CONTENT'])): ?>
+          <div class="ts-site-block">
+            <div class="ts-site-block-title">Контент страницы</div>
+            <div>
+              <?= $currentPage['UF_CONTENT'] // HTML от администратора ?>
+            </div>
+          </div>
+        <?php endif; ?>
+
+        <?php if (!empty($blocks)): ?>
+          <div class="ts-site-blocks">
+            <?php foreach ($blocks as $b): ?>
+              <?php
+                if (empty($b['UF_ACTIVE'])) continue;
+
+                $type = (string)$b['UF_TYPE'];
+                $title = (string)$b['UF_TITLE'];
+                $settings = $service->decodeSettings((string)$b['UF_SETTINGS']);
+              ?>
+              <div class="ts-site-block">
+                <?php if ($title !== ''): ?>
+                  <div class="ts-site-block-title">
+                    <?= htmlspecialcharsbx($title) ?> (<?= htmlspecialcharsbx($type) ?>)
+                  </div>
+                <?php else: ?>
+                  <div class="ts-site-block-title">
+                    Блок (<?= htmlspecialcharsbx($type) ?>)
+                  </div>
+                <?php endif; ?>
+
+                <?php if ($type === 'TEXT'): ?>
+
+                  <div><?= (string)($settings['html'] ?? '') ?></div>
+
+                <?php elseif ($type === 'IFRAME'): ?>
+
+                  <?php
+                    $url = (string)($settings['url'] ?? '');
+                    $height = (int)($settings['height'] ?? 600);
+                    if ($height <= 0) $height = 600;
+                  ?>
+                  <?php if ($url !== ''): ?>
+                    <iframe class="ts-site-iframe"
+                            src="<?= htmlspecialcharsbx($url) ?>"
+                            style="height:<?= $height ?>px;"
+                            loading="lazy"></iframe>
+                  <?php else: ?>
+                    <div class="ts-site-empty">IFRAME URL не задан.</div>
+                  <?php endif; ?>
+
+                <?php elseif ($type === 'LINK'): ?>
+
+                  <?php
+                    $url = (string)($settings['url'] ?? '');
+                    $label = (string)($settings['label'] ?? 'Открыть');
+                  ?>
+                  <?php if ($url !== ''): ?>
+                    <a class="ts-site-link-btn" href="<?= htmlspecialcharsbx($url) ?>" target="_blank">
+                      <?= htmlspecialcharsbx($label) ?>
+                    </a>
+                  <?php else: ?>
+                    <div class="ts-site-empty">Ссылка не задана.</div>
+                  <?php endif; ?>
+
+                <?php else: ?>
+
+                  <div class="ts-site-empty">
+                    Неизвестный тип блока: <?= htmlspecialcharsbx($type) ?>.
+                  </div>
+
+                <?php endif; ?>
               </div>
-            </div>
-          <?php endif; ?>
-
-          <?php if (!empty($blocks)): ?>
-            <div class="ts-site-blocks">
-              <?php foreach ($blocks as $b): ?>
-                <?php
-                  if (empty($b['UF_ACTIVE'])) continue;
-
-                  $type = (string)$b['UF_TYPE'];
-                  $title = (string)$b['UF_TITLE'];
-                  $settings = $service->decodeSettings((string)$b['UF_SETTINGS']);
-                ?>
-                <div class="ts-site-block">
-                  <?php if ($title !== ''): ?>
-                    <div class="ts-site-block-title">
-                      <?= htmlspecialcharsbx($title) ?> (<?= htmlspecialcharsbx($type) ?>)
-                    </div>
-                  <?php else: ?>
-                    <div class="ts-site-block-title">
-                      Блок (<?= htmlspecialcharsbx($type) ?>)
-                    </div>
-                  <?php endif; ?>
-
-                  <?php if ($type === 'TEXT'): ?>
-                    <div>
-                      <?= (string)($settings['html'] ?? '') ?>
-                    </div>
-
-                  <?php elseif ($type === 'IFRAME'): ?>
-                    <?php
-                      $url = (string)($settings['url'] ?? '');
-                      $height = (int)($settings['height'] ?? 600);
-                      if ($height <= 0) $height = 600;
-                    ?>
-                    <?php if ($url !== ''): ?>
-                      <iframe class="ts-site-iframe"
-                              src="<?= htmlspecialcharsbx($url) ?>"
-                              style="height:<?= $height ?>px;"
-                              loading="lazy"></iframe>
-                    <?php else: ?>
-                      <div class="ts-site-empty">IFRAME URL не задан.</div>
-                    <?php endif; ?>
-
-                  <?php elseif ($type === 'LINK'): ?>
-                    <?php
-                      $url = (string)($settings['url'] ?? '');
-                      $label = (string)($settings['label'] ?? 'Открыть');
-                    ?>
-                    <?php if ($url !== ''): ?>
-                      <a class="ts-site-link-btn" href="<?= htmlspecialcharsbx($url) ?>" target="_blank">
-                        <?= htmlspecialcharsbx($label) ?>
-                      </a>
-                    <?php else: ?>
-                      <div class="ts-site-empty">Ссылка не задана.</div>
-                    <?php endif; ?>
-
-                  <?php else: ?>
-                    <div class="ts-site-empty">
-                      Неизвестный тип блока: <?= htmlspecialcharsbx($type) ?>.
-                    </div>
-                  <?php endif; ?>
-                </div>
-              <?php endforeach; ?>
-            </div>
-          <?php else: ?>
-            <div class="ts-site-empty">
-              На этой странице пока нет блоков.
-              <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
-                <br>Перейдите в раздел <b>Блоки текущей страницы</b>, чтобы добавить первый блок.
-              <?php endif; ?>
-            </div>
-          <?php endif; ?>
-
+            <?php endforeach; ?>
+          </div>
         <?php else: ?>
-          <div class="ts-site-empty">
-            Текущая страница не найдена.
+          <div class="ts-site-empty" style="margin-top:12px;">
+            На этой странице пока нет блоков.
+            <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+              <br>Перейдите в раздел <b>Блоки текущей страницы</b>, чтобы добавить первый блок.
+            <?php endif; ?>
           </div>
         <?php endif; ?>
-      </div>
 
-      <div class="ts-site-panel">
-        <div class="ts-site-panel-title">О сайте</div>
-        <ul>
-          <li>Название: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b></li>
-          <li>CODE: <span class="ts-code"><?= htmlspecialcharsbx((string)$site['UF_CODE']) ?></span></li>
-          <li>Активен: <b><?= !empty($site['UF_ACTIVE']) ? 'Y' : 'N' ?></b></li>
-          <li>Страниц: <b><?= count($pages) ?></b></li>
-        </ul>
-        <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
-          <div style="margin-top:10px;font-size:12px;color:var(--muted);">
-            Используй кнопки сверху, чтобы перейти в управление страницами, блоками и доступами.
-          </div>
-        <?php endif; ?>
-      </div>
+      <?php else: ?>
+        <div class="ts-site-empty">
+          Текущая страница не найдена.
+        </div>
+      <?php endif; ?>
     </div>
 
   <?php endif; ?>
