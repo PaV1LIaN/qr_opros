@@ -1,43 +1,287 @@
-Ок 👌 вот тебе список свойств, которые нужно завести в инфоблок lab\_orders.
+Ок — делаю `page_edit.php` красивым, **не меняя твою логику** (валидации/slug/audit/сохранения).
 
-| Код свойства         | Название (чтобы понятно было в админке) | Тип свойства           | Особенности                         |
-| -------------------- | --------------------------------------- | ---------------------- | ----------------------------------- |
-| NAME\_IZD        | Наименование изделия                    | Строка                 | Обязательное                        |
-| ID\_I            | Номер детали                            | Строка                 |                                     |
-| DATE\_MAN        | Дата изготовления                       | Дата/время             |                                     |
-| COUNTRY          | Поставщик                               | Строка                 |                                     |
-| COUNT\_DETAIL    | Количество                              | Число                  |                                     |
-| DATE\_DEL        | Дата поставки                           | Дата/время             |                                     |
-| MATERIALS        | Материал                                | Список (множественное) | Значения: Plastic / Metal / Painted |
-| PROCESSINGS      | Обработка                               | Список (множественное) | Значения: Zeiss / LaserTracer       |
-| DATE\_DETAIL     | Дата предоставления детали              | Дата/время             |                                     |
-| WORK\_DEPARTMENT | Цех/отдел                               | Строка                 | Автозаполняется                     |
-| FULL\_NAME       | ФИО                                     | Строка                 | Автозаполняется                     |
-| PHONE            | Телефон                                 | Строка                 |                                     |
-| POSITION         | Должность                               | Строка                 | Автозаполняется                     |
-| WORK\_PHONE      | Телефон рабочий                         | Строка                 | Автозаполняется                     |
-| VIN              | VIN                                     | Строка                 |                                     |
-| TASK             | Задание для измерения                   | Текст                  |                                     |
-| NOTE             | Обоснование / примечание                | Текст                  |                                     |
-| ACCEPT           | Приём                                   | Строка                 |                                     |
-| HANDOVER         | Сдача                                   | Строка                 |                                     |
-| STATUS           | Статус                                  | Список                 | Значения: NEW / IN\_WORK / DONE     |
+Заменяй **`/local/typical_sites/page_edit.php`** целиком:
 
----
+```php
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-### Как создавать:
+use Bitrix\Main\Context;
+use Bitrix\Main\Loader;
+use Bitrix\Main\UI\Extension;
 
-1. Перейди в админку → Контент → Инфоблоки → Типы инфоблоков → lab\_orders → Свойства.
-2. Нажимаешь Добавить свойство.
-3. Указываешь Код свойства (например NAME_IZD), а Название можешь писать «Наименование изделия».
-4. Для чекбоксов (MATERIALS, PROCESSINGS, STATUS) лучше ставить Список с множественным выбором.
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-   * Для MATERIALS — добавь варианты: Plastic, Metal, Painted.
-   * Для PROCESSINGS — добавь варианты: Zeiss, LaserTracer.
-   * Для STATUS — варианты: NEW, IN\_WORK, DONE.
+global $USER, $APPLICATION;
 
----
+Extension::load([
+    "ui.buttons",
+    "ui.alerts",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
 
-⚡️ После этого твой обработчик, который я тебе дал, будет сразу сохранять все поля формы в эти свойства.
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
-Хочешь, я соберу SQL-скрипт, чтобы эти свойства добавить напрямую в БД (чтобы не клацать руками в админке)?
+$request = Context::getCurrent()->getRequest();
+$code = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
+
+if ($code === '') {
+    ShowError("Не указан code");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$siteId = (int)$site['ID'];
+$role = $service->getUserRole((int)$USER->GetID(), $siteId);
+
+// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
+    ShowError("Нет прав на редактирование страниц");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$errors = [];
+$page = null;
+
+if ($pageId > 0) {
+    $page = $service->getPageById($pageId);
+    if (!$page) {
+        $errors[] = "Страница не найдена";
+        $pageId = 0;
+    } elseif ((int)$page['UF_SITE'] !== $siteId) {
+        $errors[] = "Страница не принадлежит этому сайту";
+        $page = null;
+        $pageId = 0;
+    }
+}
+
+if ($request->isPost() && check_bitrix_sessid()) {
+    $title = (string)$request->getPost('TITLE');
+    $slug  = (string)$request->getPost('SLUG');
+    $sort  = (int)$request->getPost('SORT');
+    $active = ($request->getPost('ACTIVE') === 'Y');
+
+    $content = (string)$request->getPost('CONTENT');
+
+    try {
+        $slug = mb_strtolower(trim($slug));
+        $slug = $service->validateSlug($slug);
+        $service->assertPageSlugUnique($siteId, $slug, $pageId);
+
+        if ($pageId > 0) {
+            $service->updatePage($pageId, $siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
+
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+        } else {
+            $newPageId = $service->addPage($siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
+
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+        }
+
+        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
+    } catch (\Throwable $e) {
+        $errors[] = $e->getMessage();
+    }
+}
+
+// значения для формы (учитываем POST при ошибке)
+$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
+$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
+$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
+$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
+if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
+    $activeValue = 'N';
+}
+$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
+
+$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
+
+$backUrl = '/local/typical_sites/pages.php?code=' . urlencode($code);
+$openSiteUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
+$openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode((string)$slugValue);
+?>
+
+<style>
+.ts-formCard{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+.ts-grid2{display:grid;grid-template-columns: 1fr 260px 160px;gap:12px;}
+@media (max-width: 980px){ .ts-grid2{grid-template-columns:1fr;} }
+
+.ts-field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:700;}
+.ts-field input[type="text"], .ts-field input[type="number"], .ts-field select{
+  width:100%;
+  height:38px;
+  border:1px solid rgba(31,36,48,.14);
+  background: rgba(255,255,255,.92);
+  border-radius:12px;
+  padding: 0 12px;
+  outline:none;
+}
+.ts-field input:focus, .ts-field select:focus{
+  border-color: rgba(91,124,255,.45);
+  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
+}
+.ts-help{margin-top:8px;color: var(--muted);font-size: 12px;}
+.ts-hr{height:1px;background: rgba(231,233,242,.9);margin:14px 0;border:0;}
+</style>
+
+<div class="ts-page">
+
+  <div class="ts-hero">
+    <div class="ts-heroTop">
+      <div>
+        <h1 class="ts-title"><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы</h1>
+        <div class="ts-sub">
+          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b>
+          <?php if ($pageId > 0): ?>
+            · SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$slugValue) ?></span>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <div class="ts-actions">
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Назад к страницам</a>
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openSiteUrl) ?>" target="_blank">Открыть сайт</a>
+        <?php if ($pageId > 0): ?>
+          <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openPageUrl) ?>" target="_blank">Открыть страницу</a>
+        <?php endif; ?>
+        <button class="ui-btn ts-primary" type="submit" form="ts-page-form">
+          <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <?php if (!empty($errors)): ?>
+    <div class="ui-alert ui-alert-danger">
+      <span class="ui-alert-message">
+        <?php foreach ($errors as $e): ?>
+          <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+      </span>
+    </div>
+  <?php endif; ?>
+
+  <form method="post" id="ts-page-form" class="ts-formCard">
+    <?= bitrix_sessid_post() ?>
+
+    <div class="ts-grid2">
+      <div class="ts-field">
+        <label>Заголовок</label>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" placeholder="Например: Главная, О компании, Контакты">
+      </div>
+
+      <div class="ts-field">
+        <label>SLUG (часть URL)</label>
+        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" placeholder="about">
+        <div class="ts-help">латиница/цифры/ - _ (например: about)</div>
+      </div>
+
+      <div class="ts-field">
+        <label>Сортировка</label>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>">
+      </div>
+    </div>
+
+    <div class="ts-grid2" style="grid-template-columns: 220px 1fr 1fr; margin-top:12px;">
+      <div class="ts-field">
+        <label>Активна</label>
+        <select name="ACTIVE">
+          <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+          <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+      </div>
+      <div></div>
+      <div></div>
+    </div>
+
+    <hr class="ts-hr">
+
+    <div class="ts-field">
+      <label>Контент (HTML)</label>
+      <?php
+      if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+          \CFileMan::AddHTMLEditorFrame(
+              "CONTENT",
+              $contentValue,
+              "CONTENT_TYPE",
+              "html",
+              ["height" => 320, "width" => "100%"],
+              "N",
+              0,
+              "",
+              "",
+              false,
+              true,
+              true
+          );
+      } else {
+          ?>
+          <textarea name="CONTENT" style="width:100%; height:320px; border-radius:12px; border:1px solid rgba(31,36,48,.14); padding:10px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
+          <?php
+      }
+      ?>
+      <div class="ts-help">HTML хранится в UF_CONTENT. Блоки страницы (blocks) рендерятся отдельно.</div>
+    </div>
+
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="ui-btn ts-primary" type="submit">
+        <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
+      </button>
+      <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Отмена</a>
+    </div>
+
+  </form>
+
+</div>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+```
+
+Следующий красивый файл по цепочке — обычно **`access_manage.php`** (доступы), потому что там много действий, и UI реально влияет на удобство.
