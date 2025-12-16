@@ -1,14 +1,26 @@
 <?php
 require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
-$APPLICATION->SetTitle("Доступы к сайту");
-
-\Bitrix\Main\UI\Extension::load("ui.entity-selector");
 
 use Bitrix\Main\Context;
+use Bitrix\Main\UI\Extension;
+
+global $USER, $APPLICATION;
+
+$APPLICATION->SetTitle("Доступы к сайту");
+
+// UI + наш общий стиль
+Extension::load([
+    "ui.entity-selector",
+    "ui.buttons",
+    "ui.alerts",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
+
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-global $USER;
 $request = Context::getCurrent()->getRequest();
 
 $code = trim((string)$request->getQuery('code'));
@@ -42,18 +54,17 @@ if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
     exit;
 }
 
+// кто может управлять разработчиками
 $canManageDevelopers = ($USER->IsAdmin() || $role === 'DEVELOPER');
 
 $errors = [];
-
-$canManageDevelopers = ($USER->IsAdmin() || $role === 'DEVELOPER');
 
 if ($request->isPost() && check_bitrix_sessid()) {
     $viewers = array_unique(array_filter(array_map('intval', (array)$request->getPost('VIEWERS'))));
     $admins  = array_unique(array_filter(array_map('intval', (array)$request->getPost('ADMINS'))));
     $devsReq = array_unique(array_filter(array_map('intval', (array)$request->getPost('DEVELOPERS'))));
 
-    // Текущие dev'ы из базы
+    // Текущие DEVELOPER'ы из базы
     $access = $service->getAccessForSite($siteId);
     $devsCurrent = [];
     foreach ($access as $row) {
@@ -89,9 +100,6 @@ if ($request->isPost() && check_bitrix_sessid()) {
         }
     }
 
-    // Если ADMIN попытался подменить devs через POST — просто игнорируем
-    // (мы уже сделали $devs = $devsCurrent), можно ещё и сообщение показать при желании.
-
     if (empty($errors)) {
         try {
             $service->setSiteAccess($siteId, $viewers, $admins, $devs);
@@ -114,64 +122,248 @@ $adminsInit  = [];
 $devsInit    = [];
 
 foreach ($access as $row) {
-    if ($row['UF_ROLE'] === 'VIEWER') $viewersInit[] = (int)$row['UF_USER'];
-    if ($row['UF_ROLE'] === 'ADMIN')  $adminsInit[]  = (int)$row['UF_USER'];
-    if ($row['UF_ROLE'] === 'DEVELOPER') $devsInit[] = (int)$row['UF_USER'];
+    if ($row['UF_ROLE'] === 'VIEWER')    $viewersInit[] = (int)$row['UF_USER'];
+    if ($row['UF_ROLE'] === 'ADMIN')     $adminsInit[]  = (int)$row['UF_USER'];
+    if ($row['UF_ROLE'] === 'DEVELOPER') $devsInit[]    = (int)$row['UF_USER'];
 }
+
+$viewersCnt = count($viewersInit);
+$adminsCnt  = count($adminsInit);
+$devsCnt    = count($devsInit);
+
+$backUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
 ?>
 
-<h1>Доступы: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+<style>
+.ts-accessCard{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  height: 100%;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.ts-accessGrid{
+  display:grid;
+  grid-template-columns: minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);
+  gap:12px;
+  margin-top:12px;
+}
+@media (max-width: 1100px){
+  .ts-accessGrid{
+    grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  }
+}
+@media (max-width: 900px){
+  .ts-accessGrid{
+    grid-template-columns: 1fr;
+  }
+}
+.ts-accessTitle{
+  font-weight:800;
+  font-size:14px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.ts-accessTitle span.badge{
+  font-size:11px;
+  padding:3px 8px;
+  border-radius:999px;
+  border:1px solid rgba(31,36,48,.18);
+  background:#fff;
+}
+.ts-accessHelp{
+  font-size:12px;
+  color:var(--muted);
+}
+.ts-accessBody{
+  flex:1;
+}
+.ts-accessFooter{
+  font-size:12px;
+  color:var(--muted);
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.ts-pill-role{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid rgba(31,36,48,.12);
+  background:#fff;
+  font-size:12px;
+}
+.ts-pill-role .dot{
+  width:8px;height:8px;border-radius:999px;
+}
+.ts-pill-role.viewer{border-color:rgba(59,130,246,.30);background:rgba(59,130,246,.06);}
+.ts-pill-role.viewer .dot{background:#3b82f6;}
+.ts-pill-role.admin{border-color:rgba(245,158,11,.40);background:rgba(245,158,11,.10);}
+.ts-pill-role.admin .dot{background:#f59e0b;}
+.ts-pill-role.dev{border-color:rgba(139,92,246,.40);background:rgba(139,92,246,.12);}
+.ts-pill-role.dev .dot{background:#8b5cf6;}
 
-<p>
-    <a href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>">← Назад к сайту</a>
-</p>
+.ts-accessAlert{
+  margin-top:10px;
+  font-size:12px;
+  padding:8px 10px;
+  border-radius:12px;
+  border:1px solid #ffeeba;
+  background:#fff3cd;
+}
+.ts-accessFormFooter{
+  margin-top:14px;
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.ts-accessFormFooter .ui-btn{min-width:140px;}
+</style>
 
-<?php if (!empty($errors)): ?>
-    <div style="color:red;">
-        <?php foreach ($errors as $e): ?>
-            <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
+<div class="ts-page">
+
+  <div class="ts-hero">
+    <div class="ts-heroTop">
+      <div>
+        <h1 class="ts-title">Доступы к сайту</h1>
+        <div class="ts-sub">
+          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b> · CODE:
+          <span class="ts-code"><?= htmlspecialcharsbx((string)$site['UF_CODE']) ?></span>
+        </div>
+      </div>
+
+      <div class="ts-actions">
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Назад к сайту</a>
+        <button class="ui-btn ts-primary" type="submit" form="ts-access-form">Сохранить доступы</button>
+      </div>
     </div>
-<?php endif; ?>
 
-<form method="post" id="ts-access-form">
+    <div class="ts-grid">
+      <div class="ts-stat">
+        <div class="k">VIEWERS</div>
+        <div class="v"><?= (int)$viewersCnt ?></div>
+        <div class="hint">могут только просматривать</div>
+      </div>
+      <div class="ts-stat">
+        <div class="k">ADMINS</div>
+        <div class="v" style="color:var(--ok);"><?= (int)$adminsCnt ?></div>
+        <div class="hint">управление страницами и блоками</div>
+      </div>
+      <div class="ts-stat">
+        <div class="k">DEVELOPERS</div>
+        <div class="v" style="color:var(--warn);"><?= (int)$devsCnt ?></div>
+        <div class="hint">полный доступ (ролями, настройками)</div>
+      </div>
+    </div>
+  </div>
+
+  <?php if (!empty($errors)): ?>
+    <div class="ui-alert ui-alert-danger">
+      <span class="ui-alert-message">
+        <?php foreach ($errors as $e): ?>
+          <div><?= htmlspecialcharsbx($e) ?></div>
+        <?php endforeach; ?>
+      </span>
+    </div>
+  <?php endif; ?>
+
+  <form method="post" id="ts-access-form" class="ts-formCard">
     <?= bitrix_sessid_post() ?>
 
-    <div style="margin-top:10px;">
-        <label>VIEWERS:</label><br>
-        <div id="ts-viewers"></div>
-        <div id="ts-viewers-inputs"></div>
-    </div>
+    <div class="ts-accessGrid">
 
-    <div style="margin-top:10px;">
-        <label>ADMINS:</label><br>
-        <div id="ts-admins"></div>
-        <div id="ts-admins-inputs"></div>
-    </div>
+      <!-- VIEWERS -->
+      <div class="ts-accessCard">
+        <div class="ts-accessTitle">
+          <span>VIEWERS</span>
+          <span class="badge"><?= (int)$viewersCnt ?> чел.</span>
+        </div>
+        <div class="ts-accessHelp">
+          Могут заходить на сайт и просматривать его, но не менять структуру и контент.
+        </div>
+        <div class="ts-accessBody">
+          <div id="ts-viewers"></div>
+          <div id="ts-viewers-inputs"></div>
+        </div>
+        <div class="ts-accessFooter">
+          <span class="ts-pill-role viewer">
+            <span class="dot"></span> Просмотр
+          </span>
+        </div>
+      </div>
 
-    <?php if ($canManageDevelopers): ?>
-        <div style="margin-top:10px;">
-            <label>DEVELOPERS:</label><br>
+      <!-- ADMINS -->
+      <div class="ts-accessCard">
+        <div class="ts-accessTitle">
+          <span>ADMINS</span>
+          <span class="badge"><?= (int)$adminsCnt ?> чел.</span>
+        </div>
+        <div class="ts-accessHelp">
+          Управление страницами, блоками и частично настройками сайта. Не могут менять DEVELOPERS.
+        </div>
+        <div class="ts-accessBody">
+          <div id="ts-admins"></div>
+          <div id="ts-admins-inputs"></div>
+        </div>
+        <div class="ts-accessFooter">
+          <span class="ts-pill-role admin">
+            <span class="dot"></span> Администрирование сайта
+          </span>
+        </div>
+      </div>
+
+      <!-- DEVELOPERS -->
+      <div class="ts-accessCard">
+        <div class="ts-accessTitle">
+          <span>DEVELOPERS</span>
+          <span class="badge"><?= (int)$devsCnt ?> чел.</span>
+        </div>
+        <div class="ts-accessHelp">
+          Полный доступ: архитектура, блоки, страницы, доступы. Старайся держать список минимальным.
+        </div>
+        <div class="ts-accessBody">
+          <?php if ($canManageDevelopers): ?>
             <div id="ts-devs"></div>
             <div id="ts-devs-inputs"></div>
-            <small>Осторожно: Developer = полный доступ к управлению.</small>
+          <?php else: ?>
+            <div class="ts-accessAlert">
+              DEVELOPERS может менять только DEVELOPER или глобальный админ.  
+              Ты можешь управлять VIEWERS и ADMINS, но список DEVELOPER защищён.
+            </div>
+          <?php endif; ?>
         </div>
-    <?php else: ?>
-        <div style="margin-top:10px; padding:10px; background:#fff3cd; border:1px solid #ffeeba;">
-            DEVELOPERS может менять только DEVELOPER или глобальный админ.
+        <div class="ts-accessFooter">
+          <span class="ts-pill-role dev">
+            <span class="dot"></span> Полный тех. доступ
+          </span>
         </div>
-    <?php endif; ?>
+      </div>
 
-    <div style="margin-top:15px;">
-        <button type="submit">Сохранить доступы</button>
     </div>
-</form>
+
+    <div class="ts-accessFormFooter">
+      <button class="ui-btn ts-primary" type="submit">Сохранить доступы</button>
+      <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Отмена</a>
+    </div>
+  </form>
+</div>
 
 <script>
 BX.ready(function () {
   function renderHidden(selector, inputsId, name) {
     const box = document.getElementById(inputsId);
+    if (!box) return;
     box.innerHTML = "";
+    if (!selector) return;
+
     selector.getTags().forEach(tag => {
       if (tag.getEntityId && tag.getEntityId() === "user") {
         const id = parseInt(tag.getId(), 10);
@@ -186,6 +378,9 @@ BX.ready(function () {
   }
 
   function make(renderId, inputsId, name, context, initIds) {
+    const renderNode = document.getElementById(renderId);
+    if (!renderNode) return null;
+
     const selector = new BX.UI.EntitySelector.TagSelector({
       id: renderId,
       multiple: true,
@@ -201,7 +396,7 @@ BX.ready(function () {
       }
     });
 
-    selector.renderTo(document.getElementById(renderId));
+    selector.renderTo(renderNode);
 
     (initIds || []).forEach(id => {
       selector.addTag({
@@ -216,23 +411,31 @@ BX.ready(function () {
   }
 
   const viewersInit = <?= json_encode($viewersInit) ?>;
-
   const adminsInit  = <?= json_encode($adminsInit) ?>;
   <?php if ($canManageDevelopers): ?>
-  const devsInit    = <?= json_encode($devsInit) ?>;
-  const devsSel    = make("ts-devs",    "ts-devs-inputs",    "DEVELOPERS", "TS_DEVS_ACCESS", devsInit);
+    const devsInit    = <?= json_encode($devsInit) ?>;
+  <?php else: ?>
+    const devsInit    = [];
   <?php endif; ?>
-  
 
   const viewersSel = make("ts-viewers", "ts-viewers-inputs", "VIEWERS", "TS_VIEWERS_ACCESS", viewersInit);
-  const adminsSel  = make("ts-admins",  "ts-admins-inputs",  "ADMINS",  "TS_ADMINS_ACCESS", adminsInit);
-  
+  const adminsSel  = make("ts-admins",  "ts-admins-inputs",  "ADMINS",  "TS_ADMINS_ACCESS",  adminsInit);
+  <?php if ($canManageDevelopers): ?>
+    const devsSel    = make("ts-devs",   "ts-devs-inputs",   "DEVELOPERS", "TS_DEVS_ACCESS", devsInit);
+  <?php else: ?>
+    const devsSel    = null;
+  <?php endif; ?>
 
-  document.getElementById("ts-access-form").addEventListener("submit", function () {
-    renderHidden(viewersSel, "ts-viewers-inputs", "VIEWERS");
-    renderHidden(adminsSel,  "ts-admins-inputs",  "ADMINS");
-    renderHidden(devsSel,    "ts-devs-inputs",    "DEVELOPERS");
-  });
+  const form = document.getElementById("ts-access-form");
+  if (form) {
+    form.addEventListener("submit", function () {
+      renderHidden(viewersSel, "ts-viewers-inputs", "VIEWERS");
+      renderHidden(adminsSel,  "ts-admins-inputs",  "ADMINS");
+      <?php if ($canManageDevelopers): ?>
+        renderHidden(devsSel,   "ts-devs-inputs",    "DEVELOPERS");
+      <?php endif; ?>
+    });
+  }
 });
 </script>
 
