@@ -1,49 +1,19 @@
-<td class="actions-cell">
-  <div class="act-row">
+/* Панель теперь fixed — не режется низом таблицы */
+.mini-panel{
+  position:fixed;        /* было absolute */
+  left:0;
+  top:0;
+  width:300px;
+  max-width:calc(100vw - 40px);
+  background:#fff;
+  border:1px solid #e7e9ee;
+  border-radius:14px;
+  box-shadow:0 18px 45px rgba(16,24,40,.18);
+  padding:10px;
+  z-index:9999;
+}
 
-    <!-- Rename: mini popup -->
-    <details class="mini">
-      <summary class="iconbtn-mini iconbtn-mini--edit" title="Переименовать">
-        <?= $svgEdit ?>
-      </summary>
-      <div class="mini-panel">
-        <p class="mini-title">Переименовать</p>
-        <form method="POST" class="mini-form">
-          <?= bitrix_sessid_post() ?>
-          <input type="hidden" name="action" value="rename">
-          <input type="hidden" name="file_id" value="<?= $fid ?>">
-          <input class="input" type="text" name="new_name" value="<?= h($name) ?>">
-          <button class="btn-mini" type="submit">ОК</button>
-        </form>
-      </div>
-    </details>
-
-    <!-- Replace: mini popup -->
-    <details class="mini">
-      <summary class="iconbtn-mini iconbtn-mini--replace" title="Заменить (новая версия)">
-        <?= $svgSwap ?>
-      </summary>
-      <div class="mini-panel">
-        <p class="mini-title">Заменить (новая версия)</p>
-        <form method="POST" enctype="multipart/form-data" class="mini-form">
-          <?= bitrix_sessid_post() ?>
-          <input type="hidden" name="action" value="replace">
-          <input type="hidden" name="file_id" value="<?= $fid ?>">
-          <input class="file" type="file" name="replace_file" required>
-          <button class="btn-mini btn-mini--primary" type="submit">Заменить</button>
-        </form>
-      </div>
-    </details>
-
-    <!-- Delete: one-click icon -->
-    <form method="POST" onsubmit="return confirm('Удалить файл?');" style="display:inline;">
-      <?= bitrix_sessid_post() ?>
-      <input type="hidden" name="action" value="delete">
-      <input type="hidden" name="file_id" value="<?= $fid ?>">
-      <button class="iconbtn-mini iconbtn-mini--danger" type="submit" title="Удалить">
-        <?= $svgTrash ?>
-      </button>
-    </form>
-
-  </div>
-</td>
+/* маленькая страховка: если тема/шаблон ограничивает overflow */
+.lab-card, .table-wrap, table.lab-table, tbody, tr, td{
+  overflow:visible;
+}
