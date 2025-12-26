@@ -1,19 +1,76 @@
-/* Панель теперь fixed — не режется низом таблицы */
-.mini-panel{
-  position:fixed;        /* было absolute */
-  left:0;
-  top:0;
-  width:300px;
-  max-width:calc(100vw - 40px);
-  background:#fff;
-  border:1px solid #e7e9ee;
-  border-radius:14px;
-  box-shadow:0 18px 45px rgba(16,24,40,.18);
-  padding:10px;
-  z-index:9999;
-}
+<script>
+(function(){
+  function placePanel(details){
+    const summary = details.querySelector('summary');
+    const panel = details.querySelector('.mini-panel');
+    if (!summary || !panel) return;
 
-/* маленькая страховка: если тема/шаблон ограничивает overflow */
-.lab-card, .table-wrap, table.lab-table, tbody, tr, td{
-  overflow:visible;
-}
+    // сначала показываем, чтобы получить реальные размеры
+    panel.style.left = '0px';
+    panel.style.top = '0px';
+    panel.style.visibility = 'hidden';
+    panel.style.display = 'block';
+
+    const btn = summary.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+
+    const gap = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // x: стараемся выровнять по правому краю кнопки
+    let left = btn.right - p.width;
+    left = Math.max(12, Math.min(left, vw - p.width - 12));
+
+    // y: вниз, если помещается; иначе вверх
+    let topDown = btn.bottom + gap;
+    let topUp = btn.top - p.height - gap;
+
+    let top = topDown;
+    if (topDown + p.height > vh - 12) {
+      top = topUp;
+    }
+    top = Math.max(12, Math.min(top, vh - p.height - 12));
+
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+    panel.style.visibility = 'visible';
+  }
+
+  // закрывать другие меню при открытии одного
+  document.addEventListener('toggle', function(e){
+    const d = e.target;
+    if (!(d instanceof HTMLElement)) return;
+    if (!d.matches('details.mini')) return;
+
+    if (d.open) {
+      document.querySelectorAll('details.mini[open]').forEach(function(other){
+        if (other !== d) other.open = false;
+      });
+      placePanel(d);
+    }
+  }, true);
+
+  // при ресайзе/скролле пересчитываем позицию открытого
+  function repositionOpen(){
+    const open = document.querySelector('details.mini[open]');
+    if (open) placePanel(open);
+  }
+  window.addEventListener('resize', repositionOpen);
+  window.addEventListener('scroll', repositionOpen, true);
+
+  // клик вне панели закрывает
+  document.addEventListener('mousedown', function(e){
+    const open = document.querySelector('details.mini[open]');
+    if (!open) return;
+
+    const panel = open.querySelector('.mini-panel');
+    const summary = open.querySelector('summary');
+    if (!panel || !summary) return;
+
+    if (!panel.contains(e.target) && !summary.contains(e.target)) {
+      open.open = false;
+    }
+  });
+})();
+</script>
