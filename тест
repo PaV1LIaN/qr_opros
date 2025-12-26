@@ -1,608 +1,257 @@
-<?php
-require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');
-global $USER;
-
-require_once($_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/pg_master.php'); // getPdo()
-require_once($_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_disk.php');
-
-// --- helpers ---
-function h($s): string { return htmlspecialcharsbx((string)$s); }
-
-function userNameById(int $userId): string {
-    if ($userId <= 0) return '';
-    $rs = CUser::GetByID($userId);
-    if ($u = $rs->Fetch()) {
-        $ln = trim((string)$u['LAST_NAME']);
-        $fn = trim((string)$u['NAME']);
-        return trim($ln . ' ' . $fn);
-    }
-    return '';
+.lab-wrap{
+  max-width:1152px;
+  margin:18px auto 26px;
+  padding:0 12px;
 }
 
-function statusBadgeHtml(string $status): string {
-    $st = strtoupper(trim($status));
-
-    $map = [
-        'NEW'         => ['badge--new',      'Новая'],
-        'IN_PROGRESS' => ['badge--progress', 'В работе'],
-        'DONE'        => ['badge--done',     'Готово'],
-        'REJECTED'    => ['badge--reject',   'Отклонено'],
-    ];
-
-    if (isset($map[$st])) {
-        [$cls, $label] = $map[$st];
-        return '<span class="badge '.$cls.'" title="'.h($label).'">'.h($label).'</span>';
-    }
-
-    return '<span class="badge badge--other" title="'.h($status ?: '—').'">'.h($status ?: '—').'</span>';
+.lab-ok{
+  max-width:1152px;
+  margin:14px auto 0;
+  padding:10px 12px;
+  border-radius:12px;
+  background:#ecfdf5;
+  border:1px solid #a7f3d0;
+  color:#065f46;
+  font-weight:800;
+  box-shadow: 0 10px 25px rgba(16,24,40,.08);
 }
 
-// --- approve action (status NEW -> IN_PROGRESS) ---
-if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && check_bitrix_sessid()) {
-    global $APPLICATION;
-
-    $id = (int)$_GET['id'];
-
-    try {
-        $pdo = getPdo();
-
-        $stmt = $pdo->prepare("
-            UPDATE lab.user_applications
-            SET status = 'IN_PROGRESS'
-            WHERE id = :id AND status = 'NEW'
-        ");
-        $stmt->execute([':id' => $id]);
-
-        if ($stmt->rowCount() > 0) {
-            $st2 = $pdo->prepare("
-                SELECT id, block_id, work_department, disk_folder_id
-                FROM lab.user_applications
-                WHERE id = :id
-                LIMIT 1
-            ");
-            $st2->execute([':id' => $id]);
-            $app = $st2->fetch(PDO::FETCH_ASSOC);
-
-            if ($app) {
-                labEnsureDiskFolderForApp($pdo, $app, (int)$USER->GetID());
-            }
-        }
-
-        LocalRedirect($APPLICATION->GetCurPageParam('ok=approve', ['action','id','sessid']));
-    } catch (Throwable $e) {
-        ShowError('Ошибка оформления: ' . htmlspecialcharsbx($e->getMessage()));
-    }
+.lab-card{
+  border:1px solid #e7e9ee;
+  border-radius:16px;
+  background:#fff;
+  box-shadow: 0 18px 45px rgba(16,24,40,.10);
+  overflow:hidden;
 }
 
-if (isset($_GET['ok']) && $_GET['ok'] === 'approve') {
-    echo '<div class="lab-ok">Статус заявки обновлён.</div>';
+.lab-head{
+  padding:16px 16px 14px;
+  border-bottom:1px solid #eef0f4;
+  background:linear-gradient(180deg,#fbfbfd 0%, #ffffff 100%);
 }
 
-// --- select list from PG ---
-try {
-    $pdo = getPdo();
-
-    $where = "";
-    $params = [];
-
-    $sql = "
-        SELECT
-            id,
-            created_at,
-            user_id,
-            work_department,
-            name_izd,
-            id_i,
-            date_man,
-            status
-        FROM lab.user_applications
-        {$where}
-        ORDER BY created_at DESC
-        LIMIT 500
-    ";
-
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-} catch (Throwable $e) {
-    ShowError('Ошибка выборки заявок: ' . h($e->getMessage()));
-    require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
-    exit;
+.lab-head-top{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
 }
 
-$rows = is_array($rows) ? $rows : [];
-$count = count($rows);
-
-// --- собрать значения для фильтров ---
-$statuses = [];
-$depts = [];
-foreach ($rows as $r) {
-    $st = strtoupper(trim((string)($r['status'] ?? '')));
-    if ($st !== '') $statuses[$st] = true;
-
-    $dept = trim((string)($r['work_department'] ?? ''));
-    if ($dept !== '') $depts[$dept] = true;
-}
-$statuses = array_keys($statuses);
-sort($statuses);
-$depts = array_keys($depts);
-sort($depts);
-
-// --- styles (фон как был) + перераспределение колонок: меньше "Наименование детали", больше "Действие" ---
-echo '
-<style>
-  .lab-wrap{
-    max-width:1152px;
-    margin:18px auto 26px;
-    padding:0 12px;
-  }
-
-  .lab-ok{
-    max-width:1152px;
-    margin:14px auto 0;
-    padding:10px 12px;
-    border-radius:12px;
-    background:#ecfdf5;
-    border:1px solid #a7f3d0;
-    color:#065f46;
-    font-weight:800;
-    box-shadow: 0 10px 25px rgba(16,24,40,.08);
-  }
-
-  .lab-card{
-    border:1px solid #e7e9ee;
-    border-radius:16px;
-    background:#fff;
-    box-shadow: 0 18px 45px rgba(16,24,40,.10);
-    overflow:hidden;
-  }
-
-  .lab-head{
-    padding:16px 16px 14px;
-    border-bottom:1px solid #eef0f4;
-    background:linear-gradient(180deg,#fbfbfd 0%, #ffffff 100%);
-  }
-
-  .lab-head-top{
-    display:flex;
-    align-items:flex-end;
-    justify-content:space-between;
-    gap:12px;
-    flex-wrap:wrap;
-    margin-bottom:12px;
-  }
-
-  .lab-title{
-    margin:0;
-    font-size:16px;
-    font-weight:900;
-    color:#111827;
-    letter-spacing:.01em;
-  }
-
-  .lab-sub{
-    margin:4px 0 0;
-    font-size:12px;
-    font-weight:800;
-    color:#6b7280;
-  }
-
-  .chip{
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    padding:8px 10px;
-    border-radius:999px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    box-shadow: 0 8px 18px rgba(16,24,40,.06);
-    font-size:12px;
-    font-weight:900;
-    color:#111827;
-    white-space:nowrap;
-  }
-
-  .lab-filters{
-    display:flex;
-    flex-wrap:wrap;
-    gap:10px;
-    align-items:end;
-  }
-
-  .field{
-    min-width:180px;
-    display:flex;
-    flex-direction:column;
-    gap:6px;
-  }
-  .field--wide{ min-width:320px; flex: 1 1 320px; }
-
-  .field label{
-    font-size:11px;
-    font-weight:900;
-    color:#6b7280;
-    letter-spacing:.06em;
-    text-transform:uppercase;
-  }
-
-  .input, .select{
-    height:40px;
-    border-radius:14px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    padding:0 12px;
-    font-size:13px;
-    font-weight:700;
-    color:#111827;
-    outline:none;
-  }
-  .input:focus, .select:focus{
-    border-color:#c7d2fe;
-    box-shadow: 0 0 0 4px rgba(99,102,241,.12);
-  }
-
-  .actions{
-    display:flex;
-    gap:8px;
-    margin-left:auto;
-    align-items:center;
-  }
-
-  .btn-ui{
-    height:40px;
-    padding:0 12px;
-    border-radius:14px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    font-weight:900;
-    font-size:12px;
-    color:#374151;
-    cursor:pointer;
-    transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
-    box-shadow: 0 10px 20px rgba(16,24,40,.06);
-    white-space:nowrap;
-  }
-  .btn-ui:hover{
-    transform: translateY(-1px);
-    box-shadow: 0 14px 28px rgba(16,24,40,.10);
-    background:#f9fafb;
-  }
-
-  table.lab-table{
-    width:100%;
-    border-collapse:separate;
-    border-spacing:0;
-    table-layout:fixed;
-    color:#111827;
-    font-size:13px;
-  }
-
-  /* Перераспределили: Наименование меньше, Действие больше */
-  .c-id{width:5%}
-  .c-created{width:12%}
-  .c-init{width:14%}
-  .c-dept{width:10%}
-  .c-name{width:18%}   /* было 22% */
-  .c-num{width:10%}
-  .c-date{width:10%}
-  .c-status{width:12%}
-  .c-act{width:9%}     /* было 5% */
-
-  thead th{
-    position:sticky;
-    top:0;
-    z-index:2;
-    background:#f7f8fb;
-    color:#374151;
-    font-weight:900;
-    padding:12px 10px;
-    border-bottom:1px solid #e9ecf3;
-    white-space:nowrap;
-  }
-
-  tbody td{
-    padding:10px 8px;
-    border-bottom:1px solid #f0f2f6;
-    vertical-align:top;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    word-break:break-word;
-  }
-
-  /* у "Действие" можно чуть просторнее, раз колонка увеличена */
-  td.td-act{
-    padding:10px 8px;
-  }
-
-  tbody tr:nth-child(even){ background:#fcfcfe; }
-  tbody tr:hover{ background:#f6f9ff; }
-
-  .badge{
-    display:inline-flex;
-    align-items:center;
-    gap:6px;
-    padding:6px 10px;
-    border-radius:999px;
-    font-weight:900;
-    font-size:12px;
-    line-height:1;
-    border:1px solid transparent;
-    white-space:nowrap;
-    overflow:visible;
-    max-width:none;
-    text-overflow:clip;
-  }
-  .badge::before{
-    content:"";
-    width:8px;height:8px;border-radius:50%;
-    background:currentColor;
-    opacity:.9;
-  }
-  .badge--new{color:#1d4ed8;background:#eff6ff;border-color:#dbeafe}
-  .badge--progress{color:#b45309;background:#fffbeb;border-color:#fde68a}
-  .badge--done{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
-  .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
-  .badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
-
-  /* Действия: теперь помещаются горизонтально (колонка шире) */
-  .act{
-    display:flex;
-    flex-direction:row;  /* было column */
-    gap:8px;
-    align-items:center;
-    justify-content:flex-start;
-    white-space:nowrap;
-  }
-
-  .iconbtn{
-    width:32px;
-    height:32px;
-    border-radius:12px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    text-decoration:none;
-    box-shadow: 0 10px 20px rgba(16,24,40,.08);
-    transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
-  }
-  .iconbtn:hover{
-    transform: translateY(-1px);
-    box-shadow: 0 16px 30px rgba(16,24,40,.12);
-    background:#f9fafb;
-  }
-  .iconbtn svg{ width:16px; height:16px; color:#374151; }
-
-  .iconbtn--ok:hover{ background:#ecfdf5; }
-  .iconbtn--ok svg{ color:#065f46; }
-
-  .iconbtn--edit:hover{ background:#eff6ff; }
-  .iconbtn--edit svg{ color:#1e3a8a; }
-
-  .iconbtn--folder:hover{ background:#eef2ff; }
-  .iconbtn--folder svg{ color:#1e3a8a; }
-
-  .empty{
-    padding:18px 16px;
-    color:#6b7280;
-    font-weight:800;
-    background:#fff;
-  }
-</style>
-';
-
-// --- UI + table ---
-echo '<div class="lab-wrap">';
-echo '  <div class="lab-card">';
-echo '    <div class="lab-head">';
-echo '      <div class="lab-head-top">';
-echo '        <div>';
-echo '          <p class="lab-title">Список заявок</p>';
-echo '          <p class="lab-sub">Всего: <b>'.(int)$count.'</b> • Показано: <b id="labVisibleCount">'.(int)$count.'</b></p>';
-echo '        </div>';
-echo '        <div class="chip">Фильтры активны: <b id="labActiveFilters">0</b></div>';
-echo '      </div>';
-
-echo '      <div class="lab-filters">';
-echo '        <div class="field field--wide">';
-echo '          <label for="labSearch">Поиск</label>';
-echo '          <input class="input" id="labSearch" type="text" placeholder="Номер / инициатор / цех / деталь / статус…">';
-echo '        </div>';
-
-echo '        <div class="field">';
-echo '          <label for="labStatus">Статус</label>';
-echo '          <select class="select" id="labStatus">';
-echo '            <option value="">Все</option>';
-foreach ($statuses as $st) {
-    echo '        <option value="'.h($st).'">'.h($st).'</option>';
-}
-echo '          </select>';
-echo '        </div>';
-
-echo '        <div class="field">';
-echo '          <label for="labDept">Цех/Отдел</label>';
-echo '          <select class="select" id="labDept">';
-echo '            <option value="">Все</option>';
-foreach ($depts as $d) {
-    echo '        <option value="'.h($d).'">'.h($d).'</option>';
-}
-echo '          </select>';
-echo '        </div>';
-
-echo '        <div class="actions">';
-echo '          <button class="btn-ui" type="button" id="labClear">Сбросить</button>';
-echo '        </div>';
-echo '      </div>';
-echo '    </div>'; // head
-
-if ($count === 0) {
-    echo '<div class="empty">Пока нет заявок для отображения.</div>';
-    echo '  </div></div>';
-    require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
-    exit;
+.lab-title{
+  margin:0;
+  font-size:16px;
+  font-weight:900;
+  color:#111827;
+  letter-spacing:.01em;
 }
 
-$svgEdit = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 20h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-$svgOk   = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-$svgFold = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
-
-echo '<table class="lab-table" id="labTable">';
-echo '<colgroup>
-        <col class="c-id">
-        <col class="c-created">
-        <col class="c-init">
-        <col class="c-dept">
-        <col class="c-name">
-        <col class="c-num">
-        <col class="c-date">
-        <col class="c-status">
-        <col class="c-act">
-      </colgroup>';
-
-echo '<thead>
-        <tr>
-          <th scope="col">Номер</th>
-          <th scope="col">Создан</th>
-          <th scope="col">Инициатор</th>
-          <th scope="col">Цех/Отдел</th>
-          <th scope="col">Наименование детали</th>
-          <th scope="col">Номер детали</th>
-          <th scope="col">Дата изготовл.</th>
-          <th scope="col">Статус</th>
-          <th scope="col">Действие</th>
-        </tr>
-      </thead>';
-
-echo '<tbody>';
-
-foreach ($rows as $r) {
-    $id = (int)($r['id'] ?? 0);
-    $initiator = userNameById((int)($r['user_id'] ?? 0));
-
-    $createdAtRaw = (string)($r['created_at'] ?? '');
-    $createdAt = $createdAtRaw ? date('d.m.Y H:i', strtotime($createdAtRaw)) : '—';
-
-    $dateManRaw = (string)($r['date_man'] ?? '');
-    $dateMan = $dateManRaw ? date('d.m.Y', strtotime($dateManRaw)) : '—';
-
-    $status = (string)($r['status'] ?? '');
-    $st = strtoupper(trim($status));
-
-    $dept = trim((string)($r['work_department'] ?? ''));
-    $name = trim((string)($r['name_izd'] ?? ''));
-    $num  = trim((string)($r['id_i'] ?? ''));
-
-    $actHtml = '<div class="act">';
-    if ($st === 'NEW') {
-        $actHtml .= '<a class="iconbtn iconbtn--edit" href="edit.php?id='.$id.'" title="Редактировать">'.$svgEdit.'</a>';
-        $actHtml .= '<a class="iconbtn iconbtn--ok" href="index.php?action=approve&id='.$id.'&sessid='.bitrix_sessid().'" title="Оформить">'.$svgOk.'</a>';
-    } else {
-        $actHtml .= '<a class="iconbtn iconbtn--folder" href="files.php?id='.$id.'" title="Папка">'.$svgFold.'</a>';
-    }
-    $actHtml .= '</div>';
-
-    $searchStr = mb_strtolower(trim(implode(' ', [
-        (string)$id,
-        $createdAt,
-        $initiator,
-        $dept,
-        $name,
-        $num,
-        $dateMan,
-        $status
-    ])));
-
-    echo '<tr'
-        .' data-status="'.h($st).'"'
-        .' data-dept="'.h($dept).'"'
-        .' data-search="'.h($searchStr).'"'
-        .'>';
-
-    echo '  <td><b>'.(int)$id.'</b></td>';
-    echo '  <td>'.h($createdAt).'</td>';
-    echo '  <td title="'.h($initiator).'">'.h($initiator ?: '—').'</td>';
-    echo '  <td title="'.h($dept).'">'.h($dept ?: '—').'</td>';
-    echo '  <td title="'.h($name).'">'.h($name ?: '—').'</td>';
-    echo '  <td title="'.h($num).'">'.h($num ?: '—').'</td>';
-    echo '  <td>'.h($dateMan).'</td>';
-    echo '  <td>'.statusBadgeHtml($status).'</td>';
-    echo '  <td class="td-act">'.$actHtml.'</td>';
-    echo '</tr>';
+.lab-sub{
+  margin:4px 0 0;
+  font-size:12px;
+  font-weight:800;
+  color:#6b7280;
 }
 
-echo '</tbody></table>';
+.chip{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  box-shadow: 0 8px 18px rgba(16,24,40,.06);
+  font-size:12px;
+  font-weight:900;
+  color:#111827;
+  white-space:nowrap;
+}
 
-echo '  </div>'; // card
-echo '</div>';   // wrap
+.lab-filters{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  align-items:end;
+}
 
-// --- JS: поиск + фильтры ---
-echo '
-<script>
-(function(){
-  const searchEl = document.getElementById("labSearch");
-  const statusEl = document.getElementById("labStatus");
-  const deptEl   = document.getElementById("labDept");
-  const clearEl  = document.getElementById("labClear");
-  const table    = document.getElementById("labTable");
-  const visibleEl= document.getElementById("labVisibleCount");
-  const activeEl = document.getElementById("labActiveFilters");
+.field{
+  min-width:180px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.field--wide{ min-width:320px; flex: 1 1 320px; }
 
-  if (!table) return;
-  const rows = Array.from(table.querySelectorAll("tbody tr"));
+.field label{
+  font-size:11px;
+  font-weight:900;
+  color:#6b7280;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
 
-  function normalize(s){
-    return (s || "").toString().trim().toLowerCase();
-  }
+.input, .select{
+  height:40px;
+  border-radius:14px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  padding:0 12px;
+  font-size:13px;
+  font-weight:700;
+  color:#111827;
+  outline:none;
+}
+.input:focus, .select:focus{
+  border-color:#c7d2fe;
+  box-shadow: 0 0 0 4px rgba(99,102,241,.12);
+}
 
-  function apply(){
-    const q = normalize(searchEl ? searchEl.value : "");
-    const st = (statusEl ? statusEl.value : "").toString().trim();
-    const dp = (deptEl ? deptEl.value : "").toString().trim();
+.actions{
+  display:flex;
+  gap:8px;
+  margin-left:auto;
+  align-items:center;
+}
 
-    let visible = 0;
+.btn-ui{
+  height:40px;
+  padding:0 12px;
+  border-radius:14px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  font-weight:900;
+  font-size:12px;
+  color:#374151;
+  cursor:pointer;
+  transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
+  box-shadow: 0 10px 20px rgba(16,24,40,.06);
+  white-space:nowrap;
+}
+.btn-ui:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(16,24,40,.10);
+  background:#f9fafb;
+}
 
-    rows.forEach(tr => {
-      const rowSt = tr.getAttribute("data-status") || "";
-      const rowDp = tr.getAttribute("data-dept") || "";
-      const rowSearch = (tr.getAttribute("data-search") || "").toLowerCase();
+table.lab-table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  table-layout:fixed;
+  color:#111827;
+  font-size:13px;
+}
 
-      const okQ  = !q  || rowSearch.indexOf(q) !== -1;
-      const okSt = !st || rowSt === st;
-      const okDp = !dp || rowDp === dp;
+/* Перераспределение: Наименование меньше, Действие больше */
+.c-id{width:5%}
+.c-created{width:12%}
+.c-init{width:14%}
+.c-dept{width:10%}
+.c-name{width:18%}
+.c-num{width:10%}
+.c-date{width:10%}
+.c-status{width:12%}
+.c-act{width:9%}
 
-      const show = okQ && okSt && okDp;
-      tr.style.display = show ? "" : "none";
-      if (show) visible++;
-    });
+thead th{
+  position:sticky;
+  top:0;
+  z-index:2;
+  background:#f7f8fb;
+  color:#374151;
+  font-weight:900;
+  padding:12px 10px;
+  border-bottom:1px solid #e9ecf3;
+  white-space:nowrap;
+}
 
-    if (visibleEl) visibleEl.textContent = String(visible);
+tbody td{
+  padding:10px 8px;
+  border-bottom:1px solid #f0f2f6;
+  vertical-align:top;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  word-break:break-word;
+}
 
-    let active = 0;
-    if (q) active++;
-    if (st) active++;
-    if (dp) active++;
-    if (activeEl) activeEl.textContent = String(active);
-  }
+td.td-act{
+  padding:10px 8px;
+}
 
-  function clearAll(){
-    if (searchEl) searchEl.value = "";
-    if (statusEl) statusEl.value = "";
-    if (deptEl) deptEl.value = "";
-    apply();
-    if (searchEl) searchEl.focus();
-  }
+tbody tr:nth-child(even){ background:#fcfcfe; }
+tbody tr:hover{ background:#f6f9ff; }
 
-  if (searchEl) searchEl.addEventListener("input", apply);
-  if (statusEl) statusEl.addEventListener("change", apply);
-  if (deptEl) deptEl.addEventListener("change", apply);
-  if (clearEl) clearEl.addEventListener("click", clearAll);
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-radius:999px;
+  font-weight:900;
+  font-size:12px;
+  line-height:1;
+  border:1px solid transparent;
+  white-space:nowrap;
+  overflow:visible;
+  max-width:none;
+  text-overflow:clip;
+}
+.badge::before{
+  content:"";
+  width:8px;height:8px;border-radius:50%;
+  background:currentColor;
+  opacity:.9;
+}
+.badge--new{color:#1d4ed8;background:#eff6ff;border-color:#dbeafe}
+.badge--progress{color:#b45309;background:#fffbeb;border-color:#fde68a}
+.badge--done{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
+.badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
+.badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
 
-  apply();
-})();
-</script>
-';
+/* Действия: горизонтально */
+.act{
+  display:flex;
+  flex-direction:row;
+  gap:8px;
+  align-items:center;
+  justify-content:flex-start;
+  white-space:nowrap;
+}
 
-require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
-?>
+.iconbtn{
+  width:32px;
+  height:32px;
+  border-radius:12px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  text-decoration:none;
+  box-shadow: 0 10px 20px rgba(16,24,40,.08);
+  transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
+}
+.iconbtn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(16,24,40,.12);
+  background:#f9fafb;
+}
+.iconbtn svg{ width:16px; height:16px; color:#374151; }
+
+.iconbtn--ok:hover{ background:#ecfdf5; }
+.iconbtn--ok svg{ color:#065f46; }
+
+.iconbtn--edit:hover{ background:#eff6ff; }
+.iconbtn--edit svg{ color:#1e3a8a; }
+
+.iconbtn--folder:hover{ background:#eef2ff; }
+.iconbtn--folder svg{ color:#1e3a8a; }
+
+.empty{
+  padding:18px 16px;
+  color:#6b7280;
+  font-weight:800;
+  background:#fff;
+}
