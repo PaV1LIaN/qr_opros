@@ -19,6 +19,10 @@ function userNameById(int $userId): string {
     return '';
 }
 
+/**
+ * Бейдж статуса:
+ * - Важно: для IN_PROGRESS показываем "В работе" (и не обрезаем)
+ */
 function statusBadgeHtml(string $status): string {
     $st = strtoupper(trim($status));
 
@@ -31,9 +35,9 @@ function statusBadgeHtml(string $status): string {
 
     if (isset($map[$st])) {
         [$cls, $label] = $map[$st];
-        return '<span class="badge '.$cls.'">'.h($label).'</span>';
+        return '<span class="badge '.$cls.'" title="'.h($label).'">'.h($label).'</span>';
     }
-    return '<span class="badge badge--other">'.h($status ?: '—').'</span>';
+    return '<span class="badge badge--other" title="'.h($status ?: '—').'">'.h($status ?: '—').'</span>';
 }
 
 // --- approve action (status NEW -> IN_PROGRESS) ---
@@ -53,7 +57,7 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
         ");
         $stmt->execute([':id' => $id]);
 
-        // Если строка не обновилась (уже не NEW или не найдено) — папку не создаём
+        // Если строка не обновилась — папку не создаём
         if ($stmt->rowCount() > 0) {
             // 2) Достаём данные заявки (нужны для пути папки)
             $st2 = $pdo->prepare("
@@ -141,32 +145,9 @@ sort($statuses);
 $depts = array_keys($depts);
 sort($depts);
 
-// --- супер-красивые стили + гарантированно НЕ обрезает "Действие" ---
-// (ширина контейнера остаётся max-width:1152px)
+// --- СТИЛИ: возвращаем фон "как был" (без body-градиента) + фикс статуса "В работе" ---
 echo '
 <style>
-  :root{
-    --bg1:#f7f8ff;
-    --bg2:#f4fbff;
-    --text:#0f172a;
-    --muted:#64748b;
-    --line:#e8ecf4;
-    --card:#ffffffcc;
-    --card2:#ffffff;
-    --shadow: 0 18px 45px rgba(15,23,42,.10);
-    --shadow2: 0 10px 25px rgba(15,23,42,.08);
-    --ring: 0 0 0 4px rgba(99,102,241,.14);
-    --r:16px;
-  }
-
-  /* общий фон вокруг */
-  body{
-    background:
-      radial-gradient(1000px 500px at 10% -20%, rgba(99,102,241,.18) 0%, transparent 60%),
-      radial-gradient(900px 500px at 110% 0%, rgba(14,165,233,.16) 0%, transparent 55%),
-      linear-gradient(180deg, var(--bg1), var(--bg2));
-  }
-
   .lab-wrap{
     max-width:1152px;
     margin:18px auto 26px;
@@ -176,31 +157,27 @@ echo '
   .lab-ok{
     max-width:1152px;
     margin:14px auto 0;
-    padding:12px 14px;
-    border-radius:14px;
-    background: linear-gradient(180deg, #ecfdf5, #ffffff);
+    padding:10px 12px;
+    border-radius:12px;
+    background:#ecfdf5;
     border:1px solid #a7f3d0;
     color:#065f46;
     font-weight:800;
-    box-shadow: var(--shadow2);
+    box-shadow: 0 10px 25px rgba(15,23,42,.08);
   }
 
   .lab-card{
-    border:1px solid var(--line);
-    border-radius: var(--r);
-    background: var(--card);
-    backdrop-filter: blur(10px);
-    box-shadow: var(--shadow);
+    border:1px solid #e7e9ee;
+    border-radius:16px;
+    background:#fff;
+    box-shadow: 0 18px 45px rgba(16,24,40,.10);
     overflow:hidden;
   }
 
   .lab-head{
     padding:16px 16px 14px;
-    border-bottom:1px solid var(--line);
-    background:
-      radial-gradient(900px 240px at 10% 0%, rgba(99,102,241,.14), transparent 55%),
-      radial-gradient(700px 220px at 90% 0%, rgba(14,165,233,.12), transparent 55%),
-      linear-gradient(180deg, #ffffff, #fbfcff);
+    border-bottom:1px solid #eef0f4;
+    background:linear-gradient(180deg,#fbfbfd 0%, #ffffff 100%);
   }
 
   .lab-head-top{
@@ -216,7 +193,7 @@ echo '
     margin:0;
     font-size:16px;
     font-weight:900;
-    color:var(--text);
+    color:#111827;
     letter-spacing:.01em;
   }
 
@@ -224,7 +201,7 @@ echo '
     margin:4px 0 0;
     font-size:12px;
     font-weight:800;
-    color:var(--muted);
+    color:#6b7280;
   }
 
   .chip{
@@ -233,15 +210,14 @@ echo '
     gap:8px;
     padding:8px 10px;
     border-radius:999px;
-    border:1px solid var(--line);
+    border:1px solid #e5e7eb;
     background:#fff;
-    box-shadow: 0 8px 18px rgba(15,23,42,.06);
+    box-shadow: 0 8px 18px rgba(16,24,40,.06);
     font-size:12px;
     font-weight:900;
-    color:var(--text);
+    color:#111827;
     white-space:nowrap;
   }
-  .chip b{ color:#111827; }
 
   .lab-filters{
     display:flex;
@@ -261,7 +237,7 @@ echo '
   .field label{
     font-size:11px;
     font-weight:900;
-    color:var(--muted);
+    color:#6b7280;
     letter-spacing:.06em;
     text-transform:uppercase;
   }
@@ -269,18 +245,17 @@ echo '
   .input, .select{
     height:40px;
     border-radius:14px;
-    border:1px solid var(--line);
-    background: linear-gradient(180deg, #ffffff, #fbfcff);
+    border:1px solid #e5e7eb;
+    background:#fff;
     padding:0 12px;
     font-size:13px;
     font-weight:700;
-    color:var(--text);
+    color:#111827;
     outline:none;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
   }
   .input:focus, .select:focus{
     border-color:#c7d2fe;
-    box-shadow: var(--ring);
+    box-shadow: 0 0 0 4px rgba(99,102,241,.12);
   }
 
   .actions{
@@ -294,39 +269,39 @@ echo '
     height:40px;
     padding:0 12px;
     border-radius:14px;
-    border:1px solid var(--line);
-    background: #fff;
+    border:1px solid #e5e7eb;
+    background:#fff;
     font-weight:900;
     font-size:12px;
-    color:#334155;
+    color:#374151;
     cursor:pointer;
     transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
-    box-shadow: 0 10px 20px rgba(15,23,42,.06);
+    box-shadow: 0 10px 20px rgba(16,24,40,.06);
     white-space:nowrap;
   }
   .btn-ui:hover{
     transform: translateY(-1px);
-    box-shadow: 0 14px 28px rgba(15,23,42,.10);
-    background: linear-gradient(180deg, #ffffff, #f8fafc);
+    box-shadow: 0 14px 28px rgba(16,24,40,.10);
+    background:#f9fafb;
   }
 
-  /* ВАЖНО: чтобы ничего не обрезалось */
+  /* Ничего не обрезаем: если узко — появится горизонтальный скролл */
   .lab-table-scroll{
-    overflow-x:auto;   /* если где-то всё же тесно — появится скролл внутри, а не обрезка */
+    overflow-x:auto;
     overflow-y:hidden;
-    background: var(--card2);
+    background:#fff;
   }
 
   table.lab-table{
     width:100%;
     border-collapse:separate;
     border-spacing:0;
-    table-layout:fixed;  /* фиксируем в рамки 1152 */
-    color:var(--text);
+    table-layout:fixed;
+    color:#111827;
     font-size:13px;
   }
 
-  /* колонки в % => всегда влезает в контейнер */
+  /* Колонки в % (всегда влезают) */
   .c-id{width:6%}
   .c-created{width:12%}
   .c-init{width:14%}
@@ -334,42 +309,34 @@ echo '
   .c-name{width:22%}
   .c-num{width:10%}
   .c-date{width:10%}
-  .c-status{width:8%}
-  .c-act{width:8%}   /* узкая, но тут будут ИКОНКИ (влезает всегда) */
+  .c-status{width:10%}  /* было 8% — увеличили, чтобы "В работе" не резало */
+  .c-act{width:6%}      /* действия иконками, им много не нужно */
 
   thead th{
     position:sticky;
     top:0;
     z-index:2;
-    background: linear-gradient(180deg, #f7f8ff, #f7fbff);
-    color:#334155;
+    background:#f7f8fb;
+    color:#374151;
     font-weight:900;
     padding:12px 10px;
-    border-bottom:1px solid var(--line);
+    border-bottom:1px solid #e9ecf3;
     white-space:nowrap;
   }
 
   tbody td{
     padding:12px 10px;
-    border-bottom:1px solid #f0f3fa;
+    border-bottom:1px solid #f0f2f6;
     vertical-align:top;
     overflow:hidden;
     text-overflow:ellipsis;
     word-break:break-word;
   }
 
-  tbody tr{
-    background:#fff;
-  }
-  tbody tr:nth-child(even){
-    background:#fcfdff;
-  }
-  tbody tr:hover{
-    background: linear-gradient(90deg, rgba(99,102,241,.06), rgba(14,165,233,.05));
-  }
+  tbody tr:nth-child(even){ background:#fcfcfe; }
+  tbody tr:hover{ background:#f6f9ff; }
 
-  .muted{ color:var(--muted); font-weight:700; }
-
+  /* Бейдж: НЕ обрезаем текст */
   .badge{
     display:inline-flex;
     align-items:center;
@@ -381,6 +348,9 @@ echo '
     line-height:1;
     border:1px solid transparent;
     white-space:nowrap;
+    overflow:visible;         /* важно */
+    max-width:none;           /* важно */
+    text-overflow:clip;       /* важно */
   }
   .badge::before{
     content:"";
@@ -394,7 +364,7 @@ echo '
   .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
   .badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
 
-  /* ДЕЙСТВИЯ: вместо широких кнопок — иконки (гарантированно влезают) */
+  /* Действия: иконки */
   .act{
     display:flex;
     justify-content:flex-start;
@@ -407,41 +377,41 @@ echo '
     width:32px;
     height:32px;
     border-radius:12px;
-    border:1px solid var(--line);
-    background: linear-gradient(180deg, #ffffff, #f8fafc);
+    border:1px solid #e5e7eb;
+    background:#fff;
     display:inline-flex;
     align-items:center;
     justify-content:center;
     text-decoration:none;
-    box-shadow: 0 10px 20px rgba(15,23,42,.08);
+    box-shadow: 0 10px 20px rgba(16,24,40,.08);
     transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
   }
   .iconbtn:hover{
     transform: translateY(-1px);
-    box-shadow: 0 16px 30px rgba(15,23,42,.12);
-    background: linear-gradient(180deg, #ffffff, #eef2ff);
+    box-shadow: 0 16px 30px rgba(16,24,40,.12);
+    background:#f9fafb;
   }
-  .iconbtn svg{ width:16px; height:16px; color:#334155; }
+  .iconbtn svg{ width:16px; height:16px; color:#374151; }
 
-  .iconbtn--ok:hover{ background: linear-gradient(180deg, #ffffff, #ecfdf5); }
+  .iconbtn--ok:hover{ background:#ecfdf5; }
   .iconbtn--ok svg{ color:#065f46; }
 
-  .iconbtn--edit:hover{ background: linear-gradient(180deg, #ffffff, #eff6ff); }
+  .iconbtn--edit:hover{ background:#eff6ff; }
   .iconbtn--edit svg{ color:#1e3a8a; }
 
-  .iconbtn--folder:hover{ background: linear-gradient(180deg, #ffffff, #eef2ff); }
+  .iconbtn--folder:hover{ background:#eef2ff; }
   .iconbtn--folder svg{ color:#1e3a8a; }
 
   .empty{
     padding:18px 16px;
-    color:var(--muted);
+    color:#6b7280;
     font-weight:800;
     background:#fff;
   }
 </style>
 ';
 
-// --- header + filters + table ---
+// --- UI + table ---
 echo '<div class="lab-wrap">';
 echo '  <div class="lab-card">';
 echo '    <div class="lab-head">';
@@ -543,7 +513,6 @@ foreach ($rows as $r) {
     $name = trim((string)($r['name_izd'] ?? ''));
     $num  = trim((string)($r['id_i'] ?? ''));
 
-    // --- actions (иконки, чтобы гарантированно влезало) ---
     $actHtml = '<div class="act">';
     if ($st === 'NEW') {
         $actHtml .= '<a class="iconbtn iconbtn--edit" href="edit.php?id='.$id.'" title="Редактировать">'.$svgEdit.'</a>';
@@ -553,7 +522,6 @@ foreach ($rows as $r) {
     }
     $actHtml .= '</div>';
 
-    // строка для поиска (в data-search)
     $searchStr = mb_strtolower(trim(implode(' ', [
         (string)$id,
         $createdAt,
@@ -601,7 +569,6 @@ echo '
   const activeEl = document.getElementById("labActiveFilters");
 
   if (!table) return;
-
   const rows = Array.from(table.querySelectorAll("tbody tr"));
 
   function normalize(s){
