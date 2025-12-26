@@ -33,7 +33,6 @@ function statusBadgeHtml(string $status): string {
         [$cls, $label] = $map[$st];
         return '<span class="badge '.$cls.'">'.h($label).'</span>';
     }
-
     return '<span class="badge badge--other">'.h($status ?: '—').'</span>';
 }
 
@@ -54,9 +53,8 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
         ");
         $stmt->execute([':id' => $id]);
 
-        // Если строка не обновилась — папку не создаём
+        // Если строка не обновилась (уже не NEW или не найдено) — папку не создаём
         if ($stmt->rowCount() > 0) {
-
             // 2) Достаём данные заявки (нужны для пути папки)
             $st2 = $pdo->prepare("
                 SELECT id, block_id, work_department, disk_folder_id
@@ -82,7 +80,7 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
 }
 
 if (isset($_GET['ok']) && $_GET['ok'] === 'approve') {
-    echo '<div class="ok">Статус заявки обновлён.</div>';
+    echo '<div class="lab-ok">Статус заявки обновлён.</div>';
 }
 
 // --- select list from PG ---
@@ -143,168 +141,242 @@ sort($statuses);
 $depts = array_keys($depts);
 sort($depts);
 
-// --- styles (красивая таблица + фильтры, ширина не меняется: 1152px) ---
+// --- супер-красивые стили + гарантированно НЕ обрезает "Действие" ---
+// (ширина контейнера остаётся max-width:1152px)
 echo '
 <style>
-  .lab-table-wrap{
+  :root{
+    --bg1:#f7f8ff;
+    --bg2:#f4fbff;
+    --text:#0f172a;
+    --muted:#64748b;
+    --line:#e8ecf4;
+    --card:#ffffffcc;
+    --card2:#ffffff;
+    --shadow: 0 18px 45px rgba(15,23,42,.10);
+    --shadow2: 0 10px 25px rgba(15,23,42,.08);
+    --ring: 0 0 0 4px rgba(99,102,241,.14);
+    --r:16px;
+  }
+
+  /* общий фон вокруг */
+  body{
+    background:
+      radial-gradient(1000px 500px at 10% -20%, rgba(99,102,241,.18) 0%, transparent 60%),
+      radial-gradient(900px 500px at 110% 0%, rgba(14,165,233,.16) 0%, transparent 55%),
+      linear-gradient(180deg, var(--bg1), var(--bg2));
+  }
+
+  .lab-wrap{
     max-width:1152px;
-    margin:20px auto;
+    margin:18px auto 26px;
     padding:0 12px;
   }
 
-  .lab-table-card{
-    background:#fff;
-    border:1px solid #e7e9ee;
+  .lab-ok{
+    max-width:1152px;
+    margin:14px auto 0;
+    padding:12px 14px;
     border-radius:14px;
-    box-shadow:0 10px 30px rgba(16,24,40,.06);
-    overflow:auto; /* важно: чтобы не обрезало "Действие" */
+    background: linear-gradient(180deg, #ecfdf5, #ffffff);
+    border:1px solid #a7f3d0;
+    color:#065f46;
+    font-weight:800;
+    box-shadow: var(--shadow2);
   }
 
-  .lab-table-head{
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-    padding:14px 16px;
-    border-bottom:1px solid #eef0f4;
-    background:linear-gradient(180deg,#fbfbfd 0%, #ffffff 100%);
+  .lab-card{
+    border:1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--card);
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow);
+    overflow:hidden;
   }
 
-  .lab-table-top{
+  .lab-head{
+    padding:16px 16px 14px;
+    border-bottom:1px solid var(--line);
+    background:
+      radial-gradient(900px 240px at 10% 0%, rgba(99,102,241,.14), transparent 55%),
+      radial-gradient(700px 220px at 90% 0%, rgba(14,165,233,.12), transparent 55%),
+      linear-gradient(180deg, #ffffff, #fbfcff);
+  }
+
+  .lab-head-top{
     display:flex;
-    gap:12px;
     align-items:flex-end;
     justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+    margin-bottom:12px;
   }
 
-  .lab-table-title{
+  .lab-title{
     margin:0;
     font-size:16px;
-    line-height:1.2;
-    font-weight:800;
-    color:#111827;
+    font-weight:900;
+    color:var(--text);
+    letter-spacing:.01em;
   }
 
-  .lab-table-sub{
-    margin:2px 0 0;
+  .lab-sub{
+    margin:4px 0 0;
     font-size:12px;
-    color:#6b7280;
+    font-weight:800;
+    color:var(--muted);
   }
+
+  .chip{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 10px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:#fff;
+    box-shadow: 0 8px 18px rgba(15,23,42,.06);
+    font-size:12px;
+    font-weight:900;
+    color:var(--text);
+    white-space:nowrap;
+  }
+  .chip b{ color:#111827; }
 
   .lab-filters{
     display:flex;
     flex-wrap:wrap;
     gap:10px;
-    align-items:center;
+    align-items:end;
   }
 
-  .lab-field{
+  .field{
+    min-width:180px;
     display:flex;
     flex-direction:column;
     gap:6px;
-    min-width:190px;
   }
-  .lab-field label{
+  .field--wide{ min-width:320px; flex: 1 1 320px; }
+
+  .field label{
     font-size:11px;
-    font-weight:800;
-    color:#6b7280;
-    letter-spacing:.02em;
+    font-weight:900;
+    color:var(--muted);
+    letter-spacing:.06em;
     text-transform:uppercase;
   }
 
-  .lab-input, .lab-select{
-    height:38px;
-    border-radius:12px;
-    border:1px solid #e5e7eb;
-    background:#fff;
+  .input, .select{
+    height:40px;
+    border-radius:14px;
+    border:1px solid var(--line);
+    background: linear-gradient(180deg, #ffffff, #fbfcff);
     padding:0 12px;
-    outline:none;
     font-size:13px;
-    color:#111827;
+    font-weight:700;
+    color:var(--text);
+    outline:none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
   }
-  .lab-input:focus, .lab-select:focus{
+  .input:focus, .select:focus{
     border-color:#c7d2fe;
-    box-shadow:0 0 0 4px rgba(99,102,241,.12);
+    box-shadow: var(--ring);
   }
 
-  .lab-actions{
+  .actions{
     display:flex;
     gap:8px;
-    align-items:center;
     margin-left:auto;
+    align-items:center;
   }
 
   .btn-ui{
-    height:38px;
+    height:40px;
     padding:0 12px;
-    border-radius:12px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    font-weight:800;
+    border-radius:14px;
+    border:1px solid var(--line);
+    background: #fff;
+    font-weight:900;
     font-size:12px;
+    color:#334155;
     cursor:pointer;
-    color:#374151;
-    transition:transform .06s ease, box-shadow .12s ease, background .12s ease;
+    transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
+    box-shadow: 0 10px 20px rgba(15,23,42,.06);
     white-space:nowrap;
   }
   .btn-ui:hover{
-    background:#f9fafb;
-    box-shadow:0 8px 18px rgba(16,24,40,.08);
-    transform:translateY(-1px);
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(15,23,42,.10);
+    background: linear-gradient(180deg, #ffffff, #f8fafc);
+  }
+
+  /* ВАЖНО: чтобы ничего не обрезалось */
+  .lab-table-scroll{
+    overflow-x:auto;   /* если где-то всё же тесно — появится скролл внутри, а не обрезка */
+    overflow-y:hidden;
+    background: var(--card2);
   }
 
   table.lab-table{
     width:100%;
     border-collapse:separate;
     border-spacing:0;
-    table-layout:fixed;
-    color:#111827;
+    table-layout:fixed;  /* фиксируем в рамки 1152 */
+    color:var(--text);
     font-size:13px;
-    min-width:1080px; /* чуть страхуемся */
   }
 
-  .lab-table thead th{
+  /* колонки в % => всегда влезает в контейнер */
+  .c-id{width:6%}
+  .c-created{width:12%}
+  .c-init{width:14%}
+  .c-dept{width:10%}
+  .c-name{width:22%}
+  .c-num{width:10%}
+  .c-date{width:10%}
+  .c-status{width:8%}
+  .c-act{width:8%}   /* узкая, но тут будут ИКОНКИ (влезает всегда) */
+
+  thead th{
     position:sticky;
     top:0;
     z-index:2;
-    background:#f7f8fb;
-    color:#374151;
-    text-align:left;
-    font-weight:800;
+    background: linear-gradient(180deg, #f7f8ff, #f7fbff);
+    color:#334155;
+    font-weight:900;
     padding:12px 10px;
-    border-bottom:1px solid #e9ecf3;
+    border-bottom:1px solid var(--line);
     white-space:nowrap;
   }
 
-  .lab-table tbody td{
+  tbody td{
     padding:12px 10px;
-    border-bottom:1px solid #f0f2f6;
+    border-bottom:1px solid #f0f3fa;
     vertical-align:top;
     overflow:hidden;
     text-overflow:ellipsis;
     word-break:break-word;
   }
 
-  .lab-table tbody tr:nth-child(even){ background:#fcfcfe; }
-  .lab-table tbody tr:hover{ background:#f6f9ff; }
+  tbody tr{
+    background:#fff;
+  }
+  tbody tr:nth-child(even){
+    background:#fcfdff;
+  }
+  tbody tr:hover{
+    background: linear-gradient(90deg, rgba(99,102,241,.06), rgba(14,165,233,.05));
+  }
 
-  /* Колонки: суммарно <= 1152px, чтобы "Действие" не резало */
-  .col-id{width:64px}
-  .col-created{width:130px}
-  .col-init{width:145px}
-  .col-dept{width:105px}
-  .col-name{width:190px}
-  .col-num{width:100px}
-  .col-date{width:110px}
-  .col-status{width:95px}
-  .col-actions{width:160px}
+  .muted{ color:var(--muted); font-weight:700; }
 
   .badge{
     display:inline-flex;
     align-items:center;
     gap:6px;
-    padding:5px 10px;
+    padding:6px 10px;
     border-radius:999px;
-    font-weight:800;
+    font-weight:900;
     font-size:12px;
     line-height:1;
     border:1px solid transparent;
@@ -320,85 +392,76 @@ echo '
   .badge--progress{color:#b45309;background:#fffbeb;border-color:#fde68a}
   .badge--done{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
   .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
-  .badge--other{color:#4b5563;background:#f3f4f6;border-color:#e5e7eb}
+  .badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
 
-  /* Кнопки в колонке Действие */
-  .btns{
+  /* ДЕЙСТВИЯ: вместо широких кнопок — иконки (гарантированно влезают) */
+  .act{
     display:flex;
-    flex-wrap:nowrap;   /* важно: не переносить */
+    justify-content:flex-start;
+    align-items:center;
     gap:6px;
     white-space:nowrap;
   }
-  .btn{
+
+  .iconbtn{
+    width:32px;
+    height:32px;
+    border-radius:12px;
+    border:1px solid var(--line);
+    background: linear-gradient(180deg, #ffffff, #f8fafc);
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    padding:6px 8px;
-    border-radius:10px;
-    border:1px solid #e5e7eb;
-    background:#fff;
-    color:#111827;
-    font-weight:800;
-    font-size:12px;
     text-decoration:none;
-    transition:transform .06s ease, box-shadow .12s ease, background .12s ease;
-    white-space:nowrap;
+    box-shadow: 0 10px 20px rgba(15,23,42,.08);
+    transition: transform .08s ease, box-shadow .12s ease, background .12s ease;
   }
-  .btn:hover{
-    background:#f9fafb;
-    box-shadow:0 8px 18px rgba(16,24,40,.08);
-    transform:translateY(-1px);
+  .iconbtn:hover{
+    transform: translateY(-1px);
+    box-shadow: 0 16px 30px rgba(15,23,42,.12);
+    background: linear-gradient(180deg, #ffffff, #eef2ff);
   }
-  .btn--primary{ border-color:#c7d2fe; background:#eef2ff; color:#1e3a8a; }
-  .btn--success{ border-color:#bbf7d0; background:#ecfdf5; color:#065f46; }
-  .btn--ghost{ border-color:#e5e7eb; background:#fff; color:#374151; }
+  .iconbtn svg{ width:16px; height:16px; color:#334155; }
 
-  .lab-empty{
+  .iconbtn--ok:hover{ background: linear-gradient(180deg, #ffffff, #ecfdf5); }
+  .iconbtn--ok svg{ color:#065f46; }
+
+  .iconbtn--edit:hover{ background: linear-gradient(180deg, #ffffff, #eff6ff); }
+  .iconbtn--edit svg{ color:#1e3a8a; }
+
+  .iconbtn--folder:hover{ background: linear-gradient(180deg, #ffffff, #eef2ff); }
+  .iconbtn--folder svg{ color:#1e3a8a; }
+
+  .empty{
     padding:18px 16px;
-    color:#6b7280;
-  }
-
-  .ok{
-    max-width:1152px;
-    margin:16px auto 0;
-    padding:10px 12px;
-    border-radius:12px;
-    background:#ecfdf5;
-    border:1px solid #a7f3d0;
-    color:#065f46;
+    color:var(--muted);
     font-weight:800;
-  }
-
-  .counter{
-    font-size:12px;
-    color:#6b7280;
-    font-weight:800;
-    white-space:nowrap;
+    background:#fff;
   }
 </style>
 ';
 
-// --- UI + table ---
-echo '<div class="lab-table-wrap">';
-echo '  <div class="lab-table-card">';
-echo '    <div class="lab-table-head">';
-echo '      <div class="lab-table-top">';
+// --- header + filters + table ---
+echo '<div class="lab-wrap">';
+echo '  <div class="lab-card">';
+echo '    <div class="lab-head">';
+echo '      <div class="lab-head-top">';
 echo '        <div>';
-echo '          <p class="lab-table-title">Список заявок</p>';
-echo '          <p class="lab-table-sub">Всего: <b>'.(int)$count.'</b> • Показано: <b id="labVisibleCount">'.(int)$count.'</b></p>';
+echo '          <p class="lab-title">Список заявок</p>';
+echo '          <p class="lab-sub">Всего: <b>'.(int)$count.'</b> • Показано: <b id="labVisibleCount">'.(int)$count.'</b></p>';
 echo '        </div>';
-echo '        <div class="counter" id="labHint"></div>';
+echo '        <div class="chip">Фильтры активны: <b id="labActiveFilters">0</b></div>';
 echo '      </div>';
 
 echo '      <div class="lab-filters">';
-echo '        <div class="lab-field" style="min-width:280px">';
+echo '        <div class="field field--wide">';
 echo '          <label for="labSearch">Поиск</label>';
-echo '          <input class="lab-input" id="labSearch" type="text" placeholder="Номер, инициатор, цех/отдел, деталь, статус...">';
+echo '          <input class="input" id="labSearch" type="text" placeholder="Номер / инициатор / цех / деталь / статус…">';
 echo '        </div>';
 
-echo '        <div class="lab-field">';
+echo '        <div class="field">';
 echo '          <label for="labStatus">Статус</label>';
-echo '          <select class="lab-select" id="labStatus">';
+echo '          <select class="select" id="labStatus">';
 echo '            <option value="">Все</option>';
 foreach ($statuses as $st) {
     echo '        <option value="'.h($st).'">'.h($st).'</option>';
@@ -406,9 +469,9 @@ foreach ($statuses as $st) {
 echo '          </select>';
 echo '        </div>';
 
-echo '        <div class="lab-field">';
+echo '        <div class="field">';
 echo '          <label for="labDept">Цех/Отдел</label>';
-echo '          <select class="lab-select" id="labDept">';
+echo '          <select class="select" id="labDept">';
 echo '            <option value="">Все</option>';
 foreach ($depts as $d) {
     echo '        <option value="'.h($d).'">'.h($d).'</option>';
@@ -416,32 +479,35 @@ foreach ($depts as $d) {
 echo '          </select>';
 echo '        </div>';
 
-echo '        <div class="lab-actions">';
+echo '        <div class="actions">';
 echo '          <button class="btn-ui" type="button" id="labClear">Сбросить</button>';
 echo '        </div>';
 echo '      </div>';
-
 echo '    </div>'; // head
 
 if ($count === 0) {
-    echo '<div class="lab-empty">Пока нет заявок для отображения.</div>';
-    echo '  </div>';
-    echo '</div>';
+    echo '<div class="empty">Пока нет заявок для отображения.</div>';
+    echo '  </div></div>';
     require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
     exit;
 }
 
+$svgEdit = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 20h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+$svgOk   = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+$svgFold = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+
+echo '<div class="lab-table-scroll">';
 echo '<table class="lab-table" id="labTable">';
 echo '<colgroup>
-        <col class="col-id">
-        <col class="col-created">
-        <col class="col-init">
-        <col class="col-dept">
-        <col class="col-name">
-        <col class="col-num">
-        <col class="col-date">
-        <col class="col-status">
-        <col class="col-actions">
+        <col class="c-id">
+        <col class="c-created">
+        <col class="c-init">
+        <col class="c-dept">
+        <col class="c-name">
+        <col class="c-num">
+        <col class="c-date">
+        <col class="c-status">
+        <col class="c-act">
       </colgroup>';
 
 echo '<thead>
@@ -452,7 +518,7 @@ echo '<thead>
           <th scope="col">Цех/Отдел</th>
           <th scope="col">Наименование детали</th>
           <th scope="col">Номер детали</th>
-          <th scope="col">Дата изготовления</th>
+          <th scope="col">Дата изготовл.</th>
           <th scope="col">Статус</th>
           <th scope="col">Действие</th>
         </tr>
@@ -477,18 +543,15 @@ foreach ($rows as $r) {
     $name = trim((string)($r['name_izd'] ?? ''));
     $num  = trim((string)($r['id_i'] ?? ''));
 
-    $actionBtn = '';
-    $confirmBtn = '';
-    $folderBtn = '';
-
+    // --- actions (иконки, чтобы гарантированно влезало) ---
+    $actHtml = '<div class="act">';
     if ($st === 'NEW') {
-        $actionBtn  = '<a class="btn btn--ghost" href="edit.php?id='.$id.'">Редакт.</a>';
-        $confirmBtn = '<a class="btn btn--success" href="index.php?action=approve&id='.$id.'&sessid='.bitrix_sessid().'">Оформить</a>';
+        $actHtml .= '<a class="iconbtn iconbtn--edit" href="edit.php?id='.$id.'" title="Редактировать">'.$svgEdit.'</a>';
+        $actHtml .= '<a class="iconbtn iconbtn--ok" href="index.php?action=approve&id='.$id.'&sessid='.bitrix_sessid().'" title="Оформить">'.$svgOk.'</a>';
     } else {
-        $folderBtn = '<a class="btn btn--primary" href="files.php?id='.$id.'">Папка</a>';
+        $actHtml .= '<a class="iconbtn iconbtn--folder" href="files.php?id='.$id.'" title="Папка">'.$svgFold.'</a>';
     }
-
-    $actionsHtml = '<div class="btns">'.$actionBtn.$confirmBtn.$folderBtn.'</div>';
+    $actHtml .= '</div>';
 
     // строка для поиска (в data-search)
     $searchStr = mb_strtolower(trim(implode(' ', [
@@ -516,16 +579,16 @@ foreach ($rows as $r) {
     echo '  <td title="'.h($num).'">'.h($num ?: '—').'</td>';
     echo '  <td>'.h($dateMan).'</td>';
     echo '  <td>'.statusBadgeHtml($status).'</td>';
-    echo '  <td>'.$actionsHtml.'</td>';
+    echo '  <td>'.$actHtml.'</td>';
     echo '</tr>';
 }
 
 echo '</tbody></table>';
-
+echo '</div>'; // scroll
 echo '  </div>'; // card
 echo '</div>';   // wrap
 
-// --- JS: поиск + фильтры (клиентская фильтрация) ---
+// --- JS: поиск + фильтры ---
 echo '
 <script>
 (function(){
@@ -535,6 +598,7 @@ echo '
   const clearEl  = document.getElementById("labClear");
   const table    = document.getElementById("labTable");
   const visibleEl= document.getElementById("labVisibleCount");
+  const activeEl = document.getElementById("labActiveFilters");
 
   if (!table) return;
 
@@ -566,6 +630,12 @@ echo '
     });
 
     if (visibleEl) visibleEl.textContent = String(visible);
+
+    let active = 0;
+    if (q) active++;
+    if (st) active++;
+    if (dp) active++;
+    if (activeEl) activeEl.textContent = String(active);
   }
 
   function clearAll(){
