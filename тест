@@ -19,9 +19,6 @@ function userNameById(int $userId): string {
     return '';
 }
 
-/**
- * Бейдж статуса (IN_PROGRESS => "В работе")
- */
 function statusBadgeHtml(string $status): string {
     $st = strtoupper(trim($status));
 
@@ -132,7 +129,7 @@ sort($statuses);
 $depts = array_keys($depts);
 sort($depts);
 
-// --- styles (фон как был) + FIX: всегда вмещается (иконки в столбик в "Действие") ---
+// --- styles (фон как был) + перераспределение колонок: меньше "Наименование детали", больше "Действие" ---
 echo '
 <style>
   .lab-wrap{
@@ -272,7 +269,6 @@ echo '
     background:#f9fafb;
   }
 
-  /* Таблица — без обрезки и без скролла: всё вмещается по ширине */
   table.lab-table{
     width:100%;
     border-collapse:separate;
@@ -282,16 +278,16 @@ echo '
     font-size:13px;
   }
 
-  /* Колонки в % (100% суммарно) + "Действие" узкая, т.к. иконки вертикально */
+  /* Перераспределили: Наименование меньше, Действие больше */
   .c-id{width:5%}
   .c-created{width:12%}
   .c-init{width:14%}
   .c-dept{width:10%}
-  .c-name{width:22%}
+  .c-name{width:18%}   /* было 22% */
   .c-num{width:10%}
   .c-date{width:10%}
   .c-status{width:12%}
-  .c-act{width:5%}
+  .c-act{width:9%}     /* было 5% */
 
   thead th{
     position:sticky;
@@ -306,7 +302,7 @@ echo '
   }
 
   tbody td{
-    padding:10px 8px; /* чуть компактнее, чтобы точно влезало */
+    padding:10px 8px;
     border-bottom:1px solid #f0f2f6;
     vertical-align:top;
     overflow:hidden;
@@ -314,15 +310,14 @@ echo '
     word-break:break-word;
   }
 
-  /* У "Действие" ещё плотнее паддинги */
+  /* у "Действие" можно чуть просторнее, раз колонка увеличена */
   td.td-act{
-    padding:8px 6px;
+    padding:10px 8px;
   }
 
   tbody tr:nth-child(even){ background:#fcfcfe; }
   tbody tr:hover{ background:#f6f9ff; }
 
-  /* Бейдж — не обрезаем */
   .badge{
     display:inline-flex;
     align-items:center;
@@ -350,18 +345,19 @@ echo '
   .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
   .badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
 
-  /* Действия: ИКОНКИ В СТОЛБИК — ключевой фикс “не вмещается” */
+  /* Действия: теперь помещаются горизонтально (колонка шире) */
   .act{
     display:flex;
-    flex-direction:column; /* ВАЖНО */
-    gap:6px;
-    align-items:flex-start;
+    flex-direction:row;  /* было column */
+    gap:8px;
+    align-items:center;
     justify-content:flex-start;
+    white-space:nowrap;
   }
 
   .iconbtn{
-    width:30px;
-    height:30px;
+    width:32px;
+    height:32px;
     border-radius:12px;
     border:1px solid #e5e7eb;
     background:#fff;
