@@ -20,8 +20,7 @@ function userNameById(int $userId): string {
 }
 
 /**
- * Бейдж статуса:
- * - Важно: для IN_PROGRESS показываем "В работе" (и не обрезаем)
+ * Бейдж статуса (IN_PROGRESS => "В работе")
  */
 function statusBadgeHtml(string $status): string {
     $st = strtoupper(trim($status));
@@ -37,6 +36,7 @@ function statusBadgeHtml(string $status): string {
         [$cls, $label] = $map[$st];
         return '<span class="badge '.$cls.'" title="'.h($label).'">'.h($label).'</span>';
     }
+
     return '<span class="badge badge--other" title="'.h($status ?: '—').'">'.h($status ?: '—').'</span>';
 }
 
@@ -49,7 +49,6 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
     try {
         $pdo = getPdo();
 
-        // 1) Меняем статус NEW -> IN_PROGRESS
         $stmt = $pdo->prepare("
             UPDATE lab.user_applications
             SET status = 'IN_PROGRESS'
@@ -57,9 +56,7 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
         ");
         $stmt->execute([':id' => $id]);
 
-        // Если строка не обновилась — папку не создаём
         if ($stmt->rowCount() > 0) {
-            // 2) Достаём данные заявки (нужны для пути папки)
             $st2 = $pdo->prepare("
                 SELECT id, block_id, work_department, disk_folder_id
                 FROM lab.user_applications
@@ -70,14 +67,11 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
             $app = $st2->fetch(PDO::FETCH_ASSOC);
 
             if ($app) {
-                // 3) Создаём папку в Disk (project/dept/app_id) и пишем disk_folder_id в PG
                 labEnsureDiskFolderForApp($pdo, $app, (int)$USER->GetID());
             }
         }
 
-        // PRG редирект
         LocalRedirect($APPLICATION->GetCurPageParam('ok=approve', ['action','id','sessid']));
-
     } catch (Throwable $e) {
         ShowError('Ошибка оформления: ' . htmlspecialcharsbx($e->getMessage()));
     }
@@ -91,10 +85,6 @@ if (isset($_GET['ok']) && $_GET['ok'] === 'approve') {
 try {
     $pdo = getPdo();
 
-    // Если нужно показывать только свои заявки:
-    // $where = "WHERE user_id = :uid";
-    // $params = [':uid' => (int)$USER->GetID()];
-    // Если нужно показывать все:
     $where = "";
     $params = [];
 
@@ -130,7 +120,6 @@ $count = count($rows);
 // --- собрать значения для фильтров ---
 $statuses = [];
 $depts = [];
-
 foreach ($rows as $r) {
     $st = strtoupper(trim((string)($r['status'] ?? '')));
     if ($st !== '') $statuses[$st] = true;
@@ -138,14 +127,12 @@ foreach ($rows as $r) {
     $dept = trim((string)($r['work_department'] ?? ''));
     if ($dept !== '') $depts[$dept] = true;
 }
-
 $statuses = array_keys($statuses);
 sort($statuses);
-
 $depts = array_keys($depts);
 sort($depts);
 
-// --- СТИЛИ: возвращаем фон "как был" (без body-градиента) + фикс статуса "В работе" ---
+// --- styles (фон как был) + FIX: всегда вмещается (иконки в столбик в "Действие") ---
 echo '
 <style>
   .lab-wrap{
@@ -163,7 +150,7 @@ echo '
     border:1px solid #a7f3d0;
     color:#065f46;
     font-weight:800;
-    box-shadow: 0 10px 25px rgba(15,23,42,.08);
+    box-shadow: 0 10px 25px rgba(16,24,40,.08);
   }
 
   .lab-card{
@@ -285,13 +272,7 @@ echo '
     background:#f9fafb;
   }
 
-  /* Ничего не обрезаем: если узко — появится горизонтальный скролл */
-  .lab-table-scroll{
-    overflow-x:auto;
-    overflow-y:hidden;
-    background:#fff;
-  }
-
+  /* Таблица — без обрезки и без скролла: всё вмещается по ширине */
   table.lab-table{
     width:100%;
     border-collapse:separate;
@@ -301,16 +282,16 @@ echo '
     font-size:13px;
   }
 
-  /* Колонки в % (всегда влезают) */
-  .c-id{width:6%}
+  /* Колонки в % (100% суммарно) + "Действие" узкая, т.к. иконки вертикально */
+  .c-id{width:5%}
   .c-created{width:12%}
   .c-init{width:14%}
   .c-dept{width:10%}
   .c-name{width:22%}
   .c-num{width:10%}
   .c-date{width:10%}
-  .c-status{width:10%}  /* было 8% — увеличили, чтобы "В работе" не резало */
-  .c-act{width:6%}      /* действия иконками, им много не нужно */
+  .c-status{width:12%}
+  .c-act{width:5%}
 
   thead th{
     position:sticky;
@@ -325,7 +306,7 @@ echo '
   }
 
   tbody td{
-    padding:12px 10px;
+    padding:10px 8px; /* чуть компактнее, чтобы точно влезало */
     border-bottom:1px solid #f0f2f6;
     vertical-align:top;
     overflow:hidden;
@@ -333,10 +314,15 @@ echo '
     word-break:break-word;
   }
 
+  /* У "Действие" ещё плотнее паддинги */
+  td.td-act{
+    padding:8px 6px;
+  }
+
   tbody tr:nth-child(even){ background:#fcfcfe; }
   tbody tr:hover{ background:#f6f9ff; }
 
-  /* Бейдж: НЕ обрезаем текст */
+  /* Бейдж — не обрезаем */
   .badge{
     display:inline-flex;
     align-items:center;
@@ -348,9 +334,9 @@ echo '
     line-height:1;
     border:1px solid transparent;
     white-space:nowrap;
-    overflow:visible;         /* важно */
-    max-width:none;           /* важно */
-    text-overflow:clip;       /* важно */
+    overflow:visible;
+    max-width:none;
+    text-overflow:clip;
   }
   .badge::before{
     content:"";
@@ -364,18 +350,18 @@ echo '
   .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
   .badge--other{color:#475569;background:#f1f5f9;border-color:#e2e8f0}
 
-  /* Действия: иконки */
+  /* Действия: ИКОНКИ В СТОЛБИК — ключевой фикс “не вмещается” */
   .act{
     display:flex;
-    justify-content:flex-start;
-    align-items:center;
+    flex-direction:column; /* ВАЖНО */
     gap:6px;
-    white-space:nowrap;
+    align-items:flex-start;
+    justify-content:flex-start;
   }
 
   .iconbtn{
-    width:32px;
-    height:32px;
+    width:30px;
+    height:30px;
     border-radius:12px;
     border:1px solid #e5e7eb;
     background:#fff;
@@ -466,7 +452,6 @@ $svgEdit = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12
 $svgOk   = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 $svgFold = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 
-echo '<div class="lab-table-scroll">';
 echo '<table class="lab-table" id="labTable">';
 echo '<colgroup>
         <col class="c-id">
@@ -547,12 +532,12 @@ foreach ($rows as $r) {
     echo '  <td title="'.h($num).'">'.h($num ?: '—').'</td>';
     echo '  <td>'.h($dateMan).'</td>';
     echo '  <td>'.statusBadgeHtml($status).'</td>';
-    echo '  <td>'.$actHtml.'</td>';
+    echo '  <td class="td-act">'.$actHtml.'</td>';
     echo '</tr>';
 }
 
 echo '</tbody></table>';
-echo '</div>'; // scroll
+
 echo '  </div>'; // card
 echo '</div>';   // wrap
 
