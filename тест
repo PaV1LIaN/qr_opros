@@ -1,1 +1,163 @@
-Cannot find 'lab_blocks_template' template with page ''
+<?php
+require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');
+global $USER;
+
+require_once($_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/pg_master.php'); // getPdo()
+require_once($_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_disk.php');
+
+// --- helpers ---
+function h($s): string { return htmlspecialcharsbx((string)$s); }
+
+function userNameById(int $userId): string {
+    if ($userId <= 0) return '';
+    $rs = CUser::GetByID($userId);
+    if ($u = $rs->Fetch()) {
+        $ln = trim((string)$u['LAST_NAME']);
+        $fn = trim((string)$u['NAME']);
+        return trim($ln . ' ' . $fn);
+    }
+    return '';
+}
+
+// --- approve action (status NEW -> IN_PROGRESS) ---
+if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && check_bitrix_sessid()) {
+    global $APPLICATION;
+
+    $id = (int)$_GET['id'];
+
+    try {
+        $pdo = getPdo();
+
+        // 1) Меняем статус NEW -> IN_PROGRESS
+        $stmt = $pdo->prepare("
+            UPDATE lab.user_applications
+            SET status = 'IN_PROGRESS'
+            WHERE id = :id AND status = 'NEW'
+        ");
+        $stmt->execute([':id' => $id]);
+
+        // Если строка не обновилась (уже не NEW или не найдено) — папку не создаём
+        if ($stmt->rowCount() > 0) {
+
+            // 2) Достаём данные заявки (нужны для пути папки)
+            $st2 = $pdo->prepare("
+                SELECT id, block_id, work_department, disk_folder_id
+                FROM lab.user_applications
+                WHERE id = :id
+                LIMIT 1
+            ");
+            $st2->execute([':id' => $id]);
+            $app = $st2->fetch(PDO::FETCH_ASSOC);
+
+            if ($app) {
+                // 3) Создаём папку в Disk (project/dept/app_id) и пишем disk_folder_id в PG
+                labEnsureDiskFolderForApp($pdo, $app, (int)$USER->GetID());
+            }
+        }
+
+        // PRG редирект
+        LocalRedirect($APPLICATION->GetCurPageParam('ok=approve', ['action','id','sessid']));
+
+    } catch (Throwable $e) {
+        ShowError('Ошибка оформления: ' . htmlspecialcharsbx($e->getMessage()));
+    }
+}
+
+if (isset($_GET['ok']) && $_GET['ok'] === 'approve') {
+    echo '<div class="ok">Статус заявки обновлён.</div>';
+}
+
+// --- select list from PG ---
+try {
+    $pdo = getPdo();
+
+    // Если нужно показывать только свои заявки:
+    // $where = "WHERE user_id = :uid";
+    // $params = [':uid' => (int)$USER->GetID()];
+    // Если нужно показывать все:
+    $where = "";
+    $params = [];
+
+    $sql = "
+        SELECT
+            id,
+            created_at,
+            user_id,
+            work_department,
+            name_izd,
+            id_i,
+            date_man,
+            status
+        FROM lab.user_applications
+        {$where}
+        ORDER BY created_at DESC
+        LIMIT 500
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (Throwable $e) {
+    ShowError('Ошибка выборки заявок: ' . h($e->getMessage()));
+    require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
+    exit;
+}
+
+// --- table ---
+echo '<table border="1" cellpadding="5" cellspacing="0" style="margin:20px auto; border-collapse:collapse; color:black; max-width:1152px">';
+echo '<tr>
+        <th>Номер</th>
+        <th>Создан</th>
+        <th>Инициатор</th>
+        <th>Цех/Отдел</th>
+        <th>Наименование детали</th>
+        <th>Номер детали</th>
+        <th>Дата изготовления</th>
+        <th>Статус</th>
+        <th>Действие</th>
+      </tr>';
+
+foreach ($rows as $r) {
+    $id = (int)$r['id'];
+    $initiator = userNameById((int)($r['user_id'] ?? 0));
+
+    $createdAt = $r['created_at'] ?? '';
+    // PG timestamptz обычно приходит строкой вида "2025-12-25 10:00:00+00"
+    $createdAt = $createdAt ? date('d.m.Y H:i', strtotime($createdAt)) : '';
+
+    $dateMan = $r['date_man'] ?? '';
+    $dateMan = $dateMan ? date('d.m.Y', strtotime($dateMan)) : '';
+
+    $status = (string)($r['status'] ?? '');
+	$st = strtoupper(trim($status));
+
+	$actionBtn = '';
+	$confirmBtn = '';
+	$folderBtn = '';
+
+	if ($st === 'NEW') {
+    	$actionBtn  = '<a href="edit.php?id=' . $id . '">Редактировать</a> ';
+    	$confirmBtn = '<a href="index.php?action=approve&id=' . $id . '&sessid=' . bitrix_sessid() . '">Оформить</a>';
+	} else {
+    	// после оформления (IN_PROGRESS и дальше)
+    	$folderBtn = '<a href="files.php?id=' . $id . '">Папка</a>';
+	}
+
+    echo '<tr>
+            <td>' . $id . '</td>
+            <td>' . h($createdAt) . '</td>
+            <td>' . h($initiator) . '</td>
+            <td>' . h($r['work_department'] ?? '') . '</td>
+            <td>' . h($r['name_izd'] ?? '') . '</td>
+            <td>' . h($r['id_i'] ?? '') . '</td>
+            <td>' . h($dateMan) . '</td>
+            <td>' . h($status) . '</td>
+            <td>' . $actionBtn . $confirmBtn . $folderBtn . '</td>
+          </tr>';
+}
+
+echo '</table>';
+
+require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
+?>
