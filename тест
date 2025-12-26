@@ -172,4 +172,152 @@ try {
 
 $cnt = is_array($rows) ? count($rows) : 0;
 
-$svgDots = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12
+$svgDots = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>';
+?>
+
+<div class="lab-wrap">
+  <div class="lab-card">
+    <div class="lab-head">
+      <div class="lab-head-top">
+        <div>
+          <p class="lab-title">Файлы заявки №<?= (int)$appId ?></p>
+          <div class="lab-meta">
+            <?= statusBadge((string)($app['status'] ?? '')) ?>
+            <span class="chip">project_<?= (int)$app['block_id'] ?></span>
+            <span class="chip"><?= h((string)($app['work_department'] ?? '—')) ?></span>
+          </div>
+        </div>
+
+        <div class="chip">Файлов: <b><?= (int)$cnt ?></b></div>
+      </div>
+    </div>
+
+    <div class="lab-body">
+
+      <form method="POST" enctype="multipart/form-data" class="upload">
+        <?= bitrix_sessid_post() ?>
+        <input type="hidden" name="action" value="upload">
+        <input class="file" type="file" name="files[]" multiple>
+        <button class="btn btn--primary" type="submit">Загрузить</button>
+      </form>
+
+      <?php if ($cnt === 0): ?>
+        <div class="empty">Файлы пока не загружены.</div>
+      <?php else: ?>
+
+        <div class="table-wrap">
+          <table class="lab-table">
+            <colgroup>
+              <col class="c-name">
+              <col class="c-view">
+              <col class="c-date">
+              <col class="c-actions">
+            </colgroup>
+
+            <thead>
+              <tr>
+                <th>Файл</th>
+                <th>Просмотр</th>
+                <th>Загружен</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+
+            <tbody>
+            <?php foreach ($rows as $r):
+              $fid  = (int)$r['disk_file_id'];
+              $name = (string)$r['original_name'];
+              $f    = File::loadById($fid);
+
+              $src = '/disk/downloadFile/'.$fid.'/?&ncc=1&filename='.rawurlencode($name);
+
+              $uploadedAt = (string)($r['uploaded_at'] ?? '');
+              $uploadedAt = $uploadedAt ? date('d.m.Y H:i', strtotime($uploadedAt)) : '—';
+
+              $actions = htmlspecialcharsbx('[{"type":"download"},{"type":"edit","action":"BX.Disk.Viewer.Actions.runActionDefaultEdit","params":{"objectId":"'.$fid.'","name":"'.htmlspecialcharsbx($name).'"}}]');
+            ?>
+              <tr>
+                <td title="<?= h($name) ?>"><?= h($name) ?></td>
+
+                <td>
+                  <div class="links">
+                    <?php if ($f): ?>
+                      <span
+                        class="viewer-btn disk-detail-sidebar-editor-item disk-detail-sidebar-editor-item-show"
+                        data-viewer=""
+                        data-viewer-type="cloud-document"
+                        data-src="<?= h($src) ?>"
+                        data-viewer-type-class="BX.Disk.Viewer.DocumentItem"
+                        data-viewer-extension="disk.viewer.document-item"
+                        data-object-id="<?= (int)$fid ?>"
+                        data-title="<?= h($name) ?>"
+                        data-actions="<?= $actions ?>"
+                      >Просмотреть</span>
+                    <?php else: ?>
+                      <span class="muted">(не найден)</span>
+                    <?php endif; ?>
+
+                    <a href="<?= h($src) ?>">Скачать</a>
+                  </div>
+                </td>
+
+                <td><?= h($uploadedAt) ?></td>
+
+                <td>
+                  <div class="actions">
+                    <details class="act-menu">
+                      <summary class="iconbtn" title="Действия"><?= $svgDots ?></summary>
+
+                      <div class="menu">
+                        <p class="menu-title">Действия с файлом</p>
+
+                        <div class="menu-section">
+                          <p class="menu-title" style="margin-bottom:8px;">Переименовать</p>
+                          <form method="POST" class="menu-row">
+                            <?= bitrix_sessid_post() ?>
+                            <input type="hidden" name="action" value="rename">
+                            <input type="hidden" name="file_id" value="<?= $fid ?>">
+                            <input class="input" type="text" name="new_name" value="<?= h($name) ?>">
+                            <button class="btn" type="submit">Ок</button>
+                          </form>
+                        </div>
+
+                        <div class="menu-section">
+                          <p class="menu-title" style="margin-bottom:8px;">Заменить (новая версия)</p>
+                          <form method="POST" enctype="multipart/form-data" class="menu-row">
+                            <?= bitrix_sessid_post() ?>
+                            <input type="hidden" name="action" value="replace">
+                            <input type="hidden" name="file_id" value="<?= $fid ?>">
+                            <input class="file" type="file" name="replace_file" required>
+                            <button class="btn btn--primary" type="submit">Заменить</button>
+                          </form>
+                        </div>
+
+                        <div class="menu-section">
+                          <p class="menu-title" style="margin-bottom:8px;">Удалить</p>
+                          <form method="POST" class="menu-row" onsubmit="return confirm('Удалить файл?');">
+                            <?= bitrix_sessid_post() ?>
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="file_id" value="<?= $fid ?>">
+                            <button class="btn btn--danger" type="submit">Удалить</button>
+                          </form>
+                        </div>
+
+                      </div>
+                    </details>
+                  </div>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+            </tbody>
+
+          </table>
+        </div>
+
+      <?php endif; ?>
+
+    </div>
+  </div>
+</div>
+
+<?php require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'); ?>
