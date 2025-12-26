@@ -54,7 +54,7 @@ if (isset($_GET['action'], $_GET['id']) && $_GET['action'] === 'approve' && chec
         ");
         $stmt->execute([':id' => $id]);
 
-        // Если строка не обновилась (уже не NEW или не найдено) — папку не создаём
+        // Если строка не обновилась — папку не создаём
         if ($stmt->rowCount() > 0) {
 
             // 2) Достаём данные заявки (нужны для пути папки)
@@ -122,7 +122,28 @@ try {
     exit;
 }
 
-// --- styles (таблица красивая, ширина та же: max-width 1152px) ---
+$rows = is_array($rows) ? $rows : [];
+$count = count($rows);
+
+// --- собрать значения для фильтров ---
+$statuses = [];
+$depts = [];
+
+foreach ($rows as $r) {
+    $st = strtoupper(trim((string)($r['status'] ?? '')));
+    if ($st !== '') $statuses[$st] = true;
+
+    $dept = trim((string)($r['work_department'] ?? ''));
+    if ($dept !== '') $depts[$dept] = true;
+}
+
+$statuses = array_keys($statuses);
+sort($statuses);
+
+$depts = array_keys($depts);
+sort($depts);
+
+// --- styles (красивая таблица + фильтры, ширина не меняется: 1152px) ---
 echo '
 <style>
   .lab-table-wrap{
@@ -136,24 +157,30 @@ echo '
     border:1px solid #e7e9ee;
     border-radius:14px;
     box-shadow:0 10px 30px rgba(16,24,40,.06);
-    overflow:hidden;
+    overflow:auto; /* важно: чтобы не обрезало "Действие" */
   }
 
   .lab-table-head{
     display:flex;
-    gap:12px;
-    align-items:flex-end;
-    justify-content:space-between;
+    flex-direction:column;
+    gap:10px;
     padding:14px 16px;
     border-bottom:1px solid #eef0f4;
     background:linear-gradient(180deg,#fbfbfd 0%, #ffffff 100%);
+  }
+
+  .lab-table-top{
+    display:flex;
+    gap:12px;
+    align-items:flex-end;
+    justify-content:space-between;
   }
 
   .lab-table-title{
     margin:0;
     font-size:16px;
     line-height:1.2;
-    font-weight:700;
+    font-weight:800;
     color:#111827;
   }
 
@@ -163,6 +190,68 @@ echo '
     color:#6b7280;
   }
 
+  .lab-filters{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    align-items:center;
+  }
+
+  .lab-field{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    min-width:190px;
+  }
+  .lab-field label{
+    font-size:11px;
+    font-weight:800;
+    color:#6b7280;
+    letter-spacing:.02em;
+    text-transform:uppercase;
+  }
+
+  .lab-input, .lab-select{
+    height:38px;
+    border-radius:12px;
+    border:1px solid #e5e7eb;
+    background:#fff;
+    padding:0 12px;
+    outline:none;
+    font-size:13px;
+    color:#111827;
+  }
+  .lab-input:focus, .lab-select:focus{
+    border-color:#c7d2fe;
+    box-shadow:0 0 0 4px rgba(99,102,241,.12);
+  }
+
+  .lab-actions{
+    display:flex;
+    gap:8px;
+    align-items:center;
+    margin-left:auto;
+  }
+
+  .btn-ui{
+    height:38px;
+    padding:0 12px;
+    border-radius:12px;
+    border:1px solid #e5e7eb;
+    background:#fff;
+    font-weight:800;
+    font-size:12px;
+    cursor:pointer;
+    color:#374151;
+    transition:transform .06s ease, box-shadow .12s ease, background .12s ease;
+    white-space:nowrap;
+  }
+  .btn-ui:hover{
+    background:#f9fafb;
+    box-shadow:0 8px 18px rgba(16,24,40,.08);
+    transform:translateY(-1px);
+  }
+
   table.lab-table{
     width:100%;
     border-collapse:separate;
@@ -170,6 +259,7 @@ echo '
     table-layout:fixed;
     color:#111827;
     font-size:13px;
+    min-width:1080px; /* чуть страхуемся */
   }
 
   .lab-table thead th{
@@ -179,7 +269,7 @@ echo '
     background:#f7f8fb;
     color:#374151;
     text-align:left;
-    font-weight:700;
+    font-weight:800;
     padding:12px 10px;
     border-bottom:1px solid #e9ecf3;
     white-space:nowrap;
@@ -194,23 +284,19 @@ echo '
     word-break:break-word;
   }
 
-  .lab-table tbody tr:nth-child(even){
-    background:#fcfcfe;
-  }
-  .lab-table tbody tr:hover{
-    background:#f6f9ff;
-  }
+  .lab-table tbody tr:nth-child(even){ background:#fcfcfe; }
+  .lab-table tbody tr:hover{ background:#f6f9ff; }
 
-  /* Колонки (можно править проценты/px, но ширина контейнера не меняется) */
-  .col-id{width:72px}
-  .col-created{width:140px}
-  .col-init{width:170px}
-  .col-dept{width:130px}
-  .col-name{width:220px}
-  .col-num{width:120px}
-  .col-date{width:130px}
-  .col-status{width:130px}
-  .col-actions{width:140px}
+  /* Колонки: суммарно <= 1152px, чтобы "Действие" не резало */
+  .col-id{width:64px}
+  .col-created{width:130px}
+  .col-init{width:145px}
+  .col-dept{width:105px}
+  .col-name{width:190px}
+  .col-num{width:100px}
+  .col-date{width:110px}
+  .col-status{width:95px}
+  .col-actions{width:160px}
 
   .badge{
     display:inline-flex;
@@ -218,7 +304,7 @@ echo '
     gap:6px;
     padding:5px 10px;
     border-radius:999px;
-    font-weight:700;
+    font-weight:800;
     font-size:12px;
     line-height:1;
     border:1px solid transparent;
@@ -236,21 +322,23 @@ echo '
   .badge--reject{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
   .badge--other{color:#4b5563;background:#f3f4f6;border-color:#e5e7eb}
 
+  /* Кнопки в колонке Действие */
   .btns{
     display:flex;
-    flex-wrap:wrap;
-    gap:8px;
+    flex-wrap:nowrap;   /* важно: не переносить */
+    gap:6px;
+    white-space:nowrap;
   }
   .btn{
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    padding:7px 10px;
+    padding:6px 8px;
     border-radius:10px;
     border:1px solid #e5e7eb;
     background:#fff;
     color:#111827;
-    font-weight:700;
+    font-weight:800;
     font-size:12px;
     text-decoration:none;
     transition:transform .06s ease, box-shadow .12s ease, background .12s ease;
@@ -261,28 +349,15 @@ echo '
     box-shadow:0 8px 18px rgba(16,24,40,.08);
     transform:translateY(-1px);
   }
-  .btn--primary{
-    border-color:#c7d2fe;
-    background:#eef2ff;
-    color:#1e3a8a;
-  }
-  .btn--success{
-    border-color:#bbf7d0;
-    background:#ecfdf5;
-    color:#065f46;
-  }
-  .btn--ghost{
-    border-color:#e5e7eb;
-    background:#fff;
-    color:#374151;
-  }
+  .btn--primary{ border-color:#c7d2fe; background:#eef2ff; color:#1e3a8a; }
+  .btn--success{ border-color:#bbf7d0; background:#ecfdf5; color:#065f46; }
+  .btn--ghost{ border-color:#e5e7eb; background:#fff; color:#374151; }
 
   .lab-empty{
     padding:18px 16px;
     color:#6b7280;
   }
 
-  /* Сообщение ok (если у вас нет стилей) */
   .ok{
     max-width:1152px;
     margin:16px auto 0;
@@ -291,23 +366,62 @@ echo '
     background:#ecfdf5;
     border:1px solid #a7f3d0;
     color:#065f46;
-    font-weight:700;
+    font-weight:800;
+  }
+
+  .counter{
+    font-size:12px;
+    color:#6b7280;
+    font-weight:800;
+    white-space:nowrap;
   }
 </style>
 ';
 
-// --- table ---
-$rows = is_array($rows) ? $rows : [];
-$count = count($rows);
-
+// --- UI + table ---
 echo '<div class="lab-table-wrap">';
 echo '  <div class="lab-table-card">';
 echo '    <div class="lab-table-head">';
-echo '      <div>';
-echo '        <p class="lab-table-title">Список заявок</p>';
-echo '        <p class="lab-table-sub">Всего: <b>'.(int)$count.'</b></p>';
+echo '      <div class="lab-table-top">';
+echo '        <div>';
+echo '          <p class="lab-table-title">Список заявок</p>';
+echo '          <p class="lab-table-sub">Всего: <b>'.(int)$count.'</b> • Показано: <b id="labVisibleCount">'.(int)$count.'</b></p>';
+echo '        </div>';
+echo '        <div class="counter" id="labHint"></div>';
 echo '      </div>';
-echo '    </div>';
+
+echo '      <div class="lab-filters">';
+echo '        <div class="lab-field" style="min-width:280px">';
+echo '          <label for="labSearch">Поиск</label>';
+echo '          <input class="lab-input" id="labSearch" type="text" placeholder="Номер, инициатор, цех/отдел, деталь, статус...">';
+echo '        </div>';
+
+echo '        <div class="lab-field">';
+echo '          <label for="labStatus">Статус</label>';
+echo '          <select class="lab-select" id="labStatus">';
+echo '            <option value="">Все</option>';
+foreach ($statuses as $st) {
+    echo '        <option value="'.h($st).'">'.h($st).'</option>';
+}
+echo '          </select>';
+echo '        </div>';
+
+echo '        <div class="lab-field">';
+echo '          <label for="labDept">Цех/Отдел</label>';
+echo '          <select class="lab-select" id="labDept">';
+echo '            <option value="">Все</option>';
+foreach ($depts as $d) {
+    echo '        <option value="'.h($d).'">'.h($d).'</option>';
+}
+echo '          </select>';
+echo '        </div>';
+
+echo '        <div class="lab-actions">';
+echo '          <button class="btn-ui" type="button" id="labClear">Сбросить</button>';
+echo '        </div>';
+echo '      </div>';
+
+echo '    </div>'; // head
 
 if ($count === 0) {
     echo '<div class="lab-empty">Пока нет заявок для отображения.</div>';
@@ -317,7 +431,7 @@ if ($count === 0) {
     exit;
 }
 
-echo '<table class="lab-table">';
+echo '<table class="lab-table" id="labTable">';
 echo '<colgroup>
         <col class="col-id">
         <col class="col-created">
@@ -350,21 +464,25 @@ foreach ($rows as $r) {
     $id = (int)($r['id'] ?? 0);
     $initiator = userNameById((int)($r['user_id'] ?? 0));
 
-    $createdAt = $r['created_at'] ?? '';
-    $createdAt = $createdAt ? date('d.m.Y H:i', strtotime($createdAt)) : '—';
+    $createdAtRaw = (string)($r['created_at'] ?? '');
+    $createdAt = $createdAtRaw ? date('d.m.Y H:i', strtotime($createdAtRaw)) : '—';
 
-    $dateMan = $r['date_man'] ?? '';
-    $dateMan = $dateMan ? date('d.m.Y', strtotime($dateMan)) : '—';
+    $dateManRaw = (string)($r['date_man'] ?? '');
+    $dateMan = $dateManRaw ? date('d.m.Y', strtotime($dateManRaw)) : '—';
 
     $status = (string)($r['status'] ?? '');
     $st = strtoupper(trim($status));
+
+    $dept = trim((string)($r['work_department'] ?? ''));
+    $name = trim((string)($r['name_izd'] ?? ''));
+    $num  = trim((string)($r['id_i'] ?? ''));
 
     $actionBtn = '';
     $confirmBtn = '';
     $folderBtn = '';
 
     if ($st === 'NEW') {
-        $actionBtn  = '<a class="btn btn--ghost" href="edit.php?id='.$id.'">Редактировать</a>';
+        $actionBtn  = '<a class="btn btn--ghost" href="edit.php?id='.$id.'">Редакт.</a>';
         $confirmBtn = '<a class="btn btn--success" href="index.php?action=approve&id='.$id.'&sessid='.bitrix_sessid().'">Оформить</a>';
     } else {
         $folderBtn = '<a class="btn btn--primary" href="files.php?id='.$id.'">Папка</a>';
@@ -372,14 +490,27 @@ foreach ($rows as $r) {
 
     $actionsHtml = '<div class="btns">'.$actionBtn.$confirmBtn.$folderBtn.'</div>';
 
-    $dept = (string)($r['work_department'] ?? '');
-    $name = (string)($r['name_izd'] ?? '');
-    $num  = (string)($r['id_i'] ?? '');
+    // строка для поиска (в data-search)
+    $searchStr = mb_strtolower(trim(implode(' ', [
+        (string)$id,
+        $createdAt,
+        $initiator,
+        $dept,
+        $name,
+        $num,
+        $dateMan,
+        $status
+    ])));
 
-    echo '<tr>';
+    echo '<tr'
+        .' data-status="'.h($st).'"'
+        .' data-dept="'.h($dept).'"'
+        .' data-search="'.h($searchStr).'"'
+        .'>';
+
     echo '  <td><b>'.(int)$id.'</b></td>';
     echo '  <td>'.h($createdAt).'</td>';
-    echo '  <td>'.h($initiator ?: '—').'</td>';
+    echo '  <td title="'.h($initiator).'">'.h($initiator ?: '—').'</td>';
     echo '  <td title="'.h($dept).'">'.h($dept ?: '—').'</td>';
     echo '  <td title="'.h($name).'">'.h($name ?: '—').'</td>';
     echo '  <td title="'.h($num).'">'.h($num ?: '—').'</td>';
@@ -391,8 +522,69 @@ foreach ($rows as $r) {
 
 echo '</tbody></table>';
 
-echo '  </div>';
-echo '</div>';
+echo '  </div>'; // card
+echo '</div>';   // wrap
+
+// --- JS: поиск + фильтры (клиентская фильтрация) ---
+echo '
+<script>
+(function(){
+  const searchEl = document.getElementById("labSearch");
+  const statusEl = document.getElementById("labStatus");
+  const deptEl   = document.getElementById("labDept");
+  const clearEl  = document.getElementById("labClear");
+  const table    = document.getElementById("labTable");
+  const visibleEl= document.getElementById("labVisibleCount");
+
+  if (!table) return;
+
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+
+  function normalize(s){
+    return (s || "").toString().trim().toLowerCase();
+  }
+
+  function apply(){
+    const q = normalize(searchEl ? searchEl.value : "");
+    const st = (statusEl ? statusEl.value : "").toString().trim();
+    const dp = (deptEl ? deptEl.value : "").toString().trim();
+
+    let visible = 0;
+
+    rows.forEach(tr => {
+      const rowSt = tr.getAttribute("data-status") || "";
+      const rowDp = tr.getAttribute("data-dept") || "";
+      const rowSearch = (tr.getAttribute("data-search") || "").toLowerCase();
+
+      const okQ  = !q  || rowSearch.indexOf(q) !== -1;
+      const okSt = !st || rowSt === st;
+      const okDp = !dp || rowDp === dp;
+
+      const show = okQ && okSt && okDp;
+      tr.style.display = show ? "" : "none";
+      if (show) visible++;
+    });
+
+    if (visibleEl) visibleEl.textContent = String(visible);
+  }
+
+  function clearAll(){
+    if (searchEl) searchEl.value = "";
+    if (statusEl) statusEl.value = "";
+    if (deptEl) deptEl.value = "";
+    apply();
+    if (searchEl) searchEl.focus();
+  }
+
+  if (searchEl) searchEl.addEventListener("input", apply);
+  if (statusEl) statusEl.addEventListener("change", apply);
+  if (deptEl) deptEl.addEventListener("change", apply);
+  if (clearEl) clearEl.addEventListener("click", clearAll);
+
+  apply();
+})();
+</script>
+';
 
 require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php');
 ?>
