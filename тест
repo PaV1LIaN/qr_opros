@@ -1,1 +1,40 @@
-$homeSlug = trim((string)($site['UF_HOME_SLUG'] ?? ''));
+// выбираем текущую страницу
+$currentPage = null;
+
+if (!empty($pages)) {
+
+    // 1) если передали ?page=... — он главный
+    if ($pageSlug !== '') {
+        foreach ($pages as $p) {
+            if ((string)$p['UF_SLUG'] === $pageSlug) {
+                $currentPage = $p;
+                break;
+            }
+        }
+    }
+
+    // 2) если page не передан или не найден — пробуем UF_HOME_SLUG
+    if (!$currentPage && $pageSlug === '' && $homeSlug !== '') {
+        foreach ($pages as $p) {
+            if ((string)$p['UF_SLUG'] === $homeSlug) {
+                $currentPage = $p;
+                break;
+            }
+        }
+    }
+
+    // 3) если всё ещё нет — пробуем index
+    if (!$currentPage) {
+        foreach ($pages as $p) {
+            if ((string)$p['UF_SLUG'] === 'index') {
+                $currentPage = $p;
+                break;
+            }
+        }
+    }
+
+    // 4) финальный fallback — первая страница
+    if (!$currentPage) {
+        $currentPage = $pages[0];
+    }
+}
