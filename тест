@@ -1,1 +1,21 @@
-<a href="/local/typical_sites/site.php?code=<?= urlencode($site['UF_CODE']) ?>">
+$pageSlug = isset($_GET['page']) ? trim((string)$_GET['page']) : '';
+$pageSlug = preg_replace('~[^a-z0-9\-_]~i', '', $pageSlug);
+
+$homeSlug = (string)($site['UF_HOME_SLUG'] ?? '');
+$homeSlug = preg_replace('~[^a-z0-9\-_]~i', '', $homeSlug);
+
+// допустим, $pages = список активных страниц (slug => row)
+$pick = null;
+
+if ($pageSlug !== '' && isset($pages[$pageSlug])) {
+    $pick = $pageSlug;
+} elseif ($homeSlug !== '' && isset($pages[$homeSlug])) {
+    $pick = $homeSlug;
+} elseif (isset($pages['index'])) {
+    $pick = 'index';
+} else {
+    // первая по сортировке
+    $pick = array_key_first($pages);
+}
+
+$currentPage = $pages[$pick] ?? null;
