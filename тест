@@ -1,1 +1,43 @@
-Ошибка загрузки файла в Диск: Required params: { CREATED_BY }
+public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file, int $userId = 0): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
+    }
+
+    if ($diskFolderId <= 0) {
+        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
+    }
+
+    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
+        throw new \Exception('Файл не загружен или ошибка загрузки');
+    }
+
+    if ($userId <= 0) {
+        $userId = $this->getCurrentUserId();
+    }
+    if ($userId <= 0) {
+        throw new \Exception('Не удалось определить CREATED_BY (userId)');
+    }
+
+    $folder = \Bitrix\Disk\Folder::loadById($diskFolderId);
+    if (!$folder) {
+        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
+    }
+
+    $diskFile = $folder->uploadFile(
+        $file,
+        [
+            'NAME'       => (string)($file['name'] ?? 'file'),
+            'CREATED_BY' => $userId,
+            'UPDATED_BY' => $userId,
+        ],
+        [],
+        true
+    );
+
+    if (!$diskFile) {
+        throw new \Exception('Не удалось загрузить файл в Disk');
+    }
+
+    return (int)$diskFile->getId();
+}
