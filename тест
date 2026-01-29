@@ -3,6 +3,7 @@ require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
 use Bitrix\Main\UI\Extension;
+use Bitrix\Main\Loader;
 
 global $USER, $APPLICATION;
 
@@ -52,6 +53,8 @@ if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
     exit;
 }
 
+// ВНИМАНИЕ: у тебя здесь вызов getPageById($pageId, $siteId).
+// Если в твоём SiteService метод принимает только $pageId — убери второй аргумент.
 $page = $service->getPageById($pageId, $siteId);
 if (!$page) {
     ShowError("Страница не найдена");
@@ -120,6 +123,18 @@ function ts_preview_text(string $text, int $len = 160): string {
     if (mb_strlen($text) <= $len) return $text;
     return mb_substr($text, 0, $len) . '…';
 }
+
+// Disk URL manager (для FILE)
+$diskOk = Loader::includeModule('disk');
+$urlManager = null;
+if ($diskOk) {
+    try {
+        $urlManager = \Bitrix\Disk\Driver::getInstance()->getUrlManager();
+    } catch (\Throwable $e) {
+        $urlManager = null;
+        $diskOk = false;
+    }
+}
 ?>
 
 <style>
@@ -156,6 +171,16 @@ function ts_preview_text(string $text, int $len = 160): string {
 .ts-tag.ok .dot{background: var(--ok);}
 .ts-tag.off{border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.10);}
 .ts-tag.off .dot{background: var(--warn);}
+
+.ts-previewBtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.ts-previewBtn{
+  display:inline-flex;align-items:center;gap:8px;
+  border-radius:999px;padding:6px 12px;
+  border:1px solid rgba(37,99,235,.35);
+  background:rgba(37,99,235,.06);
+  text-decoration:none;font-size:13px;
+}
+.ts-previewBtn:hover{ background:rgba(37,99,235,.12); }
 </style>
 
 <div class="ts-page">
@@ -172,6 +197,7 @@ function ts_preview_text(string $text, int $len = 160): string {
       <div class="ts-actions">
         <a class="ui-btn ts-ghost" href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">К страницам</a>
         <a class="ui-btn ts-ghost" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть страницу</a>
+        <a class="ui-btn ts-ghost" href="/local/typical_sites/folders.php?code=<?= urlencode($code) ?>">Папки</a>
         <a class="ui-btn ui-btn-icon-add ts-primary"
            href="/local/typical_sites/block_edit.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$pageId ?>">
           Добавить блок
@@ -249,9 +275,10 @@ function ts_preview_text(string $text, int $len = 160): string {
           $isActive = !empty($b['UF_ACTIVE']);
           $settings = ts_decode_settings($b['UF_SETTINGS']);
 
-          // preview heuristics
           $preview = '';
-          $openLink = '';
+          $openLink = '';        // для LINK/IFRAME
+          $openFileUrl = '';     // для FILE
+          $openFolderUrl = '';   // для FILE
 
           // common guesses inside settings
           $url = (string)($settings['url'] ?? $settings['src'] ?? $settings['href'] ?? '');
@@ -259,10 +286,49 @@ function ts_preview_text(string $text, int $len = 160): string {
 
           if ($type === 'IFRAME') {
               $openLink = $url;
-              $preview = $url !== '' ? ('<div class="ts-mini">IFRAME URL:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>') : '<span class="ts-mini">UF_SETTINGS пустой (нет url/src)</span>';
+              $preview = $url !== ''
+                ? ('<div class="ts-mini">IFRAME URL:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>')
+                : '<span class="ts-mini">UF_SETTINGS пустой (нет url/src)</span>';
+
           } elseif ($type === 'LINK') {
               $openLink = $url;
-              $preview = $url !== '' ? ('<div class="ts-mini">Ссылка:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>') : '<span class="ts-mini">UF_SETTINGS пустой (нет url/href)</span>';
+              $preview = $url !== ''
+                ? ('<div class="ts-mini">Ссылка:</div><div><a href="'.htmlspecialcharsbx($url).'" target="_blank">'.htmlspecialcharsbx($url).'</a></div>')
+                : '<span class="ts-mini">UF_SETTINGS пустой (нет url/href)</span>';
+
+          } elseif ($type === 'FILE') {
+              $diskFileId = (int)($settings['diskFileId'] ?? 0);
+              $fileName   = (string)($settings['fileName'] ?? '');
+              $folderId   = (int)($settings['folderId'] ?? 0);
+              if ($folderId <= 0) $folderId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+
+              if ($folderId > 0) {
+                  $openFolderUrl = '/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$folderId;
+              }
+
+              if ($diskOk && $urlManager && $diskFileId > 0) {
+                  $fileObj = \Bitrix\Disk\File::loadById($diskFileId);
+                  if ($fileObj) {
+                      $openFileUrl = (string)$urlManager->getUrlForShowFile($fileObj);
+                  }
+              }
+
+              $nameLine = $fileName !== '' ? htmlspecialcharsbx($fileName) : ('Disk File ID: ' . (int)$diskFileId);
+              $preview = '<div class="ts-mini">Файл:</div><div><b>' . $nameLine . '</b></div>';
+
+              $btns = [];
+              if ($openFileUrl !== '') {
+                  $btns[] = '<a class="ts-previewBtn" href="'.htmlspecialcharsbx($openFileUrl).'" target="_blank">Открыть файл</a>';
+              }
+              if ($openFolderUrl !== '') {
+                  $btns[] = '<a class="ts-previewBtn" href="'.htmlspecialcharsbx($openFolderUrl).'" target="_blank">Открыть папку</a>';
+              }
+              if (!empty($btns)) {
+                  $preview .= '<div class="ts-previewBtns">' . implode('', $btns) . '</div>';
+              } else {
+                  $preview .= '<div class="ts-mini" style="margin-top:6px;">Нет ссылки на файл (diskFileId не задан или Disk недоступен).</div>';
+              }
+
           } else { // TEXT или любой другой
               $previewText = $text !== '' ? ts_preview_text($text) : ts_preview_text(json_encode($settings, JSON_UNESCAPED_UNICODE));
               $preview = '<div class="ts-mini">Превью:</div><div>'.htmlspecialcharsbx($previewText).'</div>';
@@ -292,6 +358,8 @@ function ts_preview_text(string $text, int $len = 160): string {
                     data-block-id="<?= (int)$blockId ?>"
                     data-edit-url="<?= htmlspecialcharsbx($editUrl) ?>"
                     data-open-link="<?= htmlspecialcharsbx($openLink) ?>"
+                    data-open-file="<?= htmlspecialcharsbx($openFileUrl) ?>"
+                    data-open-folder="<?= htmlspecialcharsbx($openFolderUrl) ?>"
                     data-copy="<?= htmlspecialcharsbx((string)$blockId) ?>">
             </button>
           </div>
@@ -395,18 +463,26 @@ function ts_preview_text(string $text, int $len = 160): string {
         btn.addEventListener('click', function(){
           const editUrl = btn.getAttribute('data-edit-url') || '';
           const openLink = btn.getAttribute('data-open-link') || '';
+          const openFile = btn.getAttribute('data-open-file') || '';
+          const openFolder = btn.getAttribute('data-open-folder') || '';
           const blockId = btn.getAttribute('data-block-id') || '0';
 
           const items = [
             { text: 'Редактировать', onclick: function(){ window.location.href = editUrl; this.popupWindow.close(); } },
-            { delimiter: true },
-            { text: 'Копировать ID', onclick: function(){ copyText(String(blockId)); this.popupWindow.close(); } },
           ];
 
           if (openLink) {
-            items.splice(1, 0, { text: 'Открыть ссылку', onclick: function(){ window.open(openLink, '_blank'); this.popupWindow.close(); } });
-            items.splice(2, 0, { delimiter: true });
+            items.push({ text: 'Открыть ссылку', onclick: function(){ window.open(openLink, '_blank'); this.popupWindow.close(); } });
           }
+          if (openFile) {
+            items.push({ text: 'Открыть файл', onclick: function(){ window.open(openFile, '_blank'); this.popupWindow.close(); } });
+          }
+          if (openFolder) {
+            items.push({ text: 'Открыть папку', onclick: function(){ window.open(openFolder, '_blank'); this.popupWindow.close(); } });
+          }
+
+          items.push({ delimiter: true });
+          items.push({ text: 'Копировать ID', onclick: function(){ copyText(String(blockId)); this.popupWindow.close(); } });
 
           BX.PopupMenu.show(
             'ts_block_menu_' + blockId,
@@ -418,6 +494,8 @@ function ts_preview_text(string $text, int $len = 160): string {
       });
     });
   }
+
+  apply();
 })();
 </script>
 
