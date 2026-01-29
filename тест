@@ -1,6 +1,37 @@
-$diskFolderId = $this->ensureSiteDiskFolder($siteId, $code, (string)$name);
+use Bitrix\Main\Loader;
+use Bitrix\Disk\Folder;
 
-// сохранить в HL Sites
-$this->updateSite($siteId, [
-    'UF_DISK_FOLDER_ID' => $diskFolderId,
-]);
+public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file, int $userId): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
+    }
+
+    if ($diskFolderId <= 0) {
+        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
+    }
+
+    // $file — это $_FILES['...'] (name/tmp_name/type/size/error)
+    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
+        throw new \Exception('Файл не загружен или ошибка загрузки');
+    }
+
+    $folder = Folder::loadById($diskFolderId);
+    if (!$folder) {
+        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
+    }
+
+    // В коробке у объекта Folder есть uploadFile($fileArray, $data, $rights, $generateUniqueName) :contentReference[oaicite:0]{index=0}
+    $diskFile = $folder->uploadFile(
+        $file,
+        ['NAME' => (string)$file['name']],
+        [],
+        true
+    );
+
+    if (!$diskFile) {
+        throw new \Exception('Не удалось загрузить файл в Disk');
+    }
+
+    return (int)$diskFile->getId();
+}
