@@ -1,40 +1,51 @@
-// выбираем текущую страницу
-$currentPage = null;
+use Bitrix\Main\Loader;
+use Bitrix\Disk\Driver;
 
-if (!empty($pages)) {
-
-    // 1) если передали ?page=... — он главный
-    if ($pageSlug !== '') {
-        foreach ($pages as $p) {
-            if ((string)$p['UF_SLUG'] === $pageSlug) {
-                $currentPage = $p;
-                break;
-            }
-        }
+public function ensureSiteDiskFolder(int $siteId, string $siteCode, string $siteName = ''): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
     }
 
-    // 2) если page не передан или не найден — пробуем UF_HOME_SLUG
-    if (!$currentPage && $pageSlug === '' && $homeSlug !== '') {
-        foreach ($pages as $p) {
-            if ((string)$p['UF_SLUG'] === $homeSlug) {
-                $currentPage = $p;
-                break;
-            }
-        }
+    // Диск компании (Общие документы)
+    $storage = Driver::getInstance()->getStorageByCommonId('shared_files');
+    if (!$storage) {
+        throw new \Exception('Не найден storage shared_files (Диск компании)');
     }
 
-    // 3) если всё ещё нет — пробуем index
-    if (!$currentPage) {
-        foreach ($pages as $p) {
-            if ((string)$p['UF_SLUG'] === 'index') {
-                $currentPage = $p;
-                break;
-            }
-        }
+    $root = $storage->getRootObject();
+    if (!$root) {
+        throw new \Exception('Не найден root folder Диска компании');
     }
 
-    // 4) финальный fallback — первая страница
-    if (!$currentPage) {
-        $currentPage = $pages[0];
+    // Название папки: "TS_<code>" (можешь поменять)
+    $folderName = 'TS_' . $this->normalizeSlug($siteCode);
+
+    // Если уже создана и записана — просто вернём
+    $site = $this->getSiteById($siteId); // если у тебя есть такой метод; иначе получи сайт как умеешь
+    $existingId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+    if ($existingId > 0) {
+        return $existingId;
     }
+
+    // Попробуем найти папку по имени (на случай, если создавалась вручную)
+    $children = $root->getChildren([
+        'filter' => ['=NAME' => $folderName],
+        'limit'  => 1,
+    ]);
+    if (!empty($children)) {
+        $folder = $children[0];
+        return (int)$folder->getId();
+    }
+
+    // Создаём
+    $folder = $root->addSubFolder([
+        'NAME' => $folderName,
+    ], $this->getCurrentUserId()); // сделай метод getCurrentUserId() или передай ID пользователя
+
+    if (!$folder) {
+        throw new \Exception('Не удалось создать папку в Диске компании');
+    }
+
+    return (int)$folder->getId();
 }
