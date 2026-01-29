@@ -1,32 +1,425 @@
-public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file): int
-{
-    if (!Loader::includeModule('disk')) {
-        throw new \Exception('Модуль disk не установлен');
-    }
+<?php
+// /local/typical_sites/block_edit.php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-    if ($diskFolderId <= 0) {
-        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
-    }
+use Bitrix\Main\Context;
+use Bitrix\Main\UI\Extension;
 
-    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
-        throw new \Exception('Файл не загружен или ошибка загрузки');
-    }
+global $USER, $APPLICATION;
 
-    $folder = \Bitrix\Disk\Folder::loadById($diskFolderId);
-    if (!$folder) {
-        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
-    }
+Extension::load([
+    "ui.buttons",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
 
-    $diskFile = $folder->uploadFile(
-        $file,
-        ['NAME' => (string)($file['name'] ?? 'file')],
-        [],
-        true
-    );
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
-    if (!$diskFile) {
-        throw new \Exception('Не удалось загрузить файл в Disk');
-    }
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
-    return (int)$diskFile->getId();
+function h($v): string { return htmlspecialcharsbx((string)$v); }
+
+$request = Context::getCurrent()->getRequest();
+
+$code   = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
+$blockId = (int)$request->getQuery('block_id'); // optional
+
+if ($code === '' || $pageId <= 0) {
+    ShowError("Не указан code или page_id");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
 }
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site || empty($site['UF_ACTIVE'])) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$siteId = (int)$site['ID'];
+$role = $service->getUserRole((int)$USER->GetID(), $siteId);
+
+// Редактировать блоки могут:
+// - глобальный админ
+// - ADMIN / DEVELOPER на сайте
+if (
+    !$USER->IsAdmin()
+    && !in_array($role, ['ADMIN', 'DEVELOPER'], true)
+) {
+    ShowError("У вас нет прав на редактирование блоков");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$page = $service->getPageById($pageId);
+if (!$page || (int)$page['UF_SITE'] !== $siteId) {
+    ShowError("Страница не найдена или не принадлежит сайту");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$isEdit = $blockId > 0;
+$block = null;
+
+$type   = 'TEXT';
+$title  = '';
+$sort   = 100;
+$active = true;
+$settings = [];
+
+if ($isEdit) {
+    $block = $service->getBlockById($blockId);
+    if (!$block || (int)$block['UF_SITE'] !== $siteId || (int)$block['UF_PAGE'] !== $pageId) {
+        ShowError("Блок не найден или не принадлежит странице/сайту");
+        require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+        exit;
+    }
+
+    $type   = (string)$block['UF_TYPE'];
+    $title  = (string)$block['UF_TITLE'];
+    $sort   = (int)$block['UF_SORT'];
+    $active = !empty($block['UF_ACTIVE']);
+    $settings = $service->decodeSettings((string)$block['UF_SETTINGS']);
+}
+
+$errors = [];
+$okMsg = '';
+
+if ($request->isPost() && check_bitrix_sessid()) {
+    $type   = strtoupper(trim((string)$request->getPost('TYPE')));
+    $title  = trim((string)$request->getPost('TITLE'));
+    $sort   = (int)$request->getPost('SORT');
+    $active = ((string)$request->getPost('ACTIVE') === 'Y');
+
+    if ($sort <= 0) $sort = 100;
+
+    // settings из POST (общий контейнер)
+    $postSettings = $request->getPost('settings');
+    if (!is_array($postSettings)) $postSettings = [];
+
+    // поддерживаемые типы
+    $allowedTypes = ['TEXT', 'IFRAME', 'LINK', 'FILE'];
+    if (!in_array($type, $allowedTypes, true)) {
+        $errors[] = "Неизвестный тип блока";
+    }
+
+    // Собираем settings строго по типу
+    $settings = [];
+
+    if ($type === 'TEXT') {
+        $settings['html'] = (string)($postSettings['html'] ?? '');
+
+    } elseif ($type === 'IFRAME') {
+        $url = trim((string)($postSettings['url'] ?? ''));
+        $height = (int)($postSettings['height'] ?? 600);
+        if ($height <= 0) $height = 600;
+
+        if ($url !== '' && method_exists($service, 'isSafeUrl') && !$service->isSafeUrl($url)) {
+            $errors[] = "IFRAME URL небезопасный (разрешены только http/https)";
+        }
+
+        $settings['url'] = $url;
+        $settings['height'] = $height;
+
+    } elseif ($type === 'LINK') {
+        $url = trim((string)($postSettings['url'] ?? ''));
+        $label = trim((string)($postSettings['label'] ?? 'Открыть'));
+
+        if ($url !== '' && method_exists($service, 'isSafeUrl') && !$service->isSafeUrl($url)) {
+            $errors[] = "Ссылка небезопасная (разрешены только http/https)";
+        }
+
+        $settings['url'] = $url;
+        $settings['label'] = ($label !== '' ? $label : 'Открыть');
+
+    } elseif ($type === 'FILE') {
+        $label = trim((string)($postSettings['label'] ?? 'Открыть файл'));
+        $settings['label'] = ($label !== '' ? $label : 'Открыть файл');
+
+        // сохраним существующий diskFileId (если редактируем и файл не меняем)
+        $existingDiskFileId = (int)($postSettings['diskFileId'] ?? 0);
+        $existingFileName   = (string)($postSettings['fileName'] ?? '');
+        if ($existingDiskFileId > 0) {
+            $settings['diskFileId'] = $existingDiskFileId;
+        }
+        if ($existingFileName !== '') {
+            $settings['fileName'] = $existingFileName;
+        }
+
+        // если загружаем новый файл — заливаем в папку сайта на Диске
+        if (!empty($_FILES['upload_file']) && !empty($_FILES['upload_file']['tmp_name'])) {
+            $diskFolderId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+            if ($diskFolderId <= 0) {
+                $errors[] = "У сайта не задан UF_DISK_FOLDER_ID (папка Диска)";
+            } else {
+                try {
+                    // Поддержка двух сигнатур метода:
+                    // uploadFileToSiteDiskFolder($folderId, $file)
+                    // uploadFileToSiteDiskFolder($folderId, $file, $userId)
+                    $diskFileId = 0;
+                    if (method_exists($service, 'uploadFileToSiteDiskFolder')) {
+                        $rm = new \ReflectionMethod($service, 'uploadFileToSiteDiskFolder');
+                        $n = $rm->getNumberOfParameters();
+
+                        if ($n >= 3) {
+                            $diskFileId = (int)$service->uploadFileToSiteDiskFolder($diskFolderId, $_FILES['upload_file'], (int)$USER->GetID());
+                        } else {
+                            $diskFileId = (int)$service->uploadFileToSiteDiskFolder($diskFolderId, $_FILES['upload_file']);
+                        }
+                    } else {
+                        $errors[] = "В SiteService нет метода uploadFileToSiteDiskFolder()";
+                    }
+
+                    if ($diskFileId > 0) {
+                        $settings['diskFileId'] = $diskFileId;
+                        $settings['fileName'] = (string)($_FILES['upload_file']['name'] ?? '');
+                    } else {
+                        $errors[] = "Не удалось загрузить файл в Диск";
+                    }
+                } catch (\Throwable $e) {
+                    $errors[] = "Ошибка загрузки файла в Диск: " . $e->getMessage();
+                }
+            }
+        }
+    }
+
+    if (empty($errors)) {
+        $data = [
+            'TYPE' => $type,
+            'TITLE' => $title,
+            'SORT' => $sort,
+            'ACTIVE' => $active,
+            'SETTINGS' => $settings,
+        ];
+
+        try {
+            if ($isEdit) {
+                $service->updateBlock($blockId, $siteId, $pageId, $data);
+                if (method_exists($service, 'logAction')) {
+                    $service->logAction($siteId, (int)$USER->GetID(), 'UPDATE', 'block', $blockId, [
+                        'page_id' => $pageId,
+                        'type' => $type,
+                        'title' => $title,
+                    ]);
+                }
+            } else {
+                $newId = $service->addBlock($siteId, $pageId, $data);
+                if (method_exists($service, 'logAction')) {
+                    $service->logAction($siteId, (int)$USER->GetID(), 'CREATE', 'block', (int)$newId, [
+                        'page_id' => $pageId,
+                        'type' => $type,
+                        'title' => $title,
+                    ]);
+                }
+            }
+
+            LocalRedirect('/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . (int)$pageId);
+        } catch (\Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+    }
+}
+
+$APPLICATION->SetTitle($isEdit ? 'Редактирование блока' : 'Создание блока');
+
+$types = [
+    'TEXT'   => 'Текст (HTML)',
+    'IFRAME' => 'Iframe',
+    'LINK'   => 'Ссылка',
+    'FILE'   => 'Файл (Disk)',
+];
+
+?>
+<style>
+.ts-form-wrapper{max-width:980px;margin:0 auto;padding:0 12px 28px;}
+.ts-topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:12px 0 16px;}
+.ts-h1{font-size:22px;font-weight:800;margin:0;}
+.ts-sub{font-size:13px;color:var(--muted);margin-top:4px;}
+.ts-card{background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;}
+.ts-grid{display:grid;grid-template-columns: 1fr 1fr;gap:14px;}
+@media (max-width: 900px){.ts-grid{grid-template-columns:1fr;}}
+.ts-field label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px;font-weight:700;}
+.ts-field input[type="text"], .ts-field input[type="number"], .ts-field select, .ts-field textarea{
+  width:100%;border:1px solid rgba(148,163,184,.65);border-radius:12px;padding:10px 12px;font-size:14px;
+}
+.ts-field textarea{min-height:160px;resize:vertical;}
+.ts-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.ts-note{font-size:12px;color:var(--muted);margin-top:6px;}
+.ts-err{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.28);padding:10px 12px;border-radius:12px;margin-bottom:12px;font-size:13px;}
+.ts-ok{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);padding:10px 12px;border-radius:12px;margin-bottom:12px;font-size:13px;}
+.ts-type-box{display:none;margin-top:10px;}
+.ts-type-box.is-show{display:block;}
+</style>
+
+<div class="ts-form-wrapper">
+
+  <div class="ts-topbar">
+    <div>
+      <h1 class="ts-h1"><?= $isEdit ? 'Редактирование блока' : 'Создание блока' ?></h1>
+      <div class="ts-sub">
+        Сайт: <b><?= h($site['UF_NAME']) ?></b> (<?= h($site['UF_CODE']) ?>) ·
+        Страница: <b><?= h($page['UF_TITLE']) ?></b> (<?= h($page['UF_SLUG']) ?>)
+      </div>
+    </div>
+    <div class="ts-row">
+      <a class="ui-btn ui-btn-light" href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$pageId ?>">Назад</a>
+      <a class="ui-btn ui-btn-light" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>&page=<?= urlencode((string)$page['UF_SLUG']) ?>" target="_blank">Открыть просмотр</a>
+    </div>
+  </div>
+
+  <?php if (!empty($errors)): ?>
+    <div class="ts-err">
+      <b>Ошибка:</b><br>
+      <?= implode('<br>', array_map('h', $errors)) ?>
+    </div>
+  <?php elseif ($okMsg !== ''): ?>
+    <div class="ts-ok"><?= h($okMsg) ?></div>
+  <?php endif; ?>
+
+  <form method="post" enctype="multipart/form-data" class="ts-card">
+    <?= bitrix_sessid_post() ?>
+
+    <div class="ts-grid">
+      <div class="ts-field">
+        <label>Тип блока</label>
+        <select name="TYPE" id="ts-type">
+          <?php foreach ($types as $k => $label): ?>
+            <option value="<?= h($k) ?>" <?= ($type === $k ? 'selected' : '') ?>><?= h($label) ?></option>
+          <?php endforeach; ?>
+        </select>
+        <div class="ts-note">Для FILE нужен модуль Disk и папка сайта в Диске.</div>
+      </div>
+
+      <div class="ts-field">
+        <label>Заголовок (необязательно)</label>
+        <input type="text" name="TITLE" value="<?= h($title) ?>" placeholder="Например: Документ / Блок №1">
+      </div>
+
+      <div class="ts-field">
+        <label>Сортировка</label>
+        <input type="number" name="SORT" value="<?= (int)$sort ?>" min="1" step="1">
+      </div>
+
+      <div class="ts-field">
+        <label>Активность</label>
+        <div class="ts-row" style="padding-top:8px;">
+          <label style="font-weight:600;color:rgba(31,36,48,.9);">
+            <input type="checkbox" name="ACTIVE" value="Y" <?= $active ? 'checked' : '' ?>>
+            Активен
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- TEXT -->
+    <?php $sHtml = (string)($settings['html'] ?? ''); ?>
+    <div class="ts-type-box <?= ($type === 'TEXT' ? 'is-show' : '') ?>" data-typebox="TEXT">
+      <div class="ts-field">
+        <label>HTML</label>
+        <textarea name="settings[html]" placeholder="<p>Текст...</p>"><?= h($sHtml) ?></textarea>
+      </div>
+    </div>
+
+    <!-- IFRAME -->
+    <?php
+      $sUrl = (string)($settings['url'] ?? '');
+      $sHeight = (int)($settings['height'] ?? 600);
+      if ($sHeight <= 0) $sHeight = 600;
+    ?>
+    <div class="ts-type-box <?= ($type === 'IFRAME' ? 'is-show' : '') ?>" data-typebox="IFRAME">
+      <div class="ts-grid">
+        <div class="ts-field">
+          <label>URL (http/https)</label>
+          <input type="text" name="settings[url]" value="<?= h($sUrl) ?>" placeholder="https://example.com/">
+        </div>
+        <div class="ts-field">
+          <label>Высота (px)</label>
+          <input type="number" name="settings[height]" value="<?= (int)$sHeight ?>" min="200" step="10">
+        </div>
+      </div>
+    </div>
+
+    <!-- LINK -->
+    <?php
+      $lUrl = (string)($settings['url'] ?? '');
+      $lLabel = (string)($settings['label'] ?? 'Открыть');
+    ?>
+    <div class="ts-type-box <?= ($type === 'LINK' ? 'is-show' : '') ?>" data-typebox="LINK">
+      <div class="ts-grid">
+        <div class="ts-field">
+          <label>URL (http/https)</label>
+          <input type="text" name="settings[url]" value="<?= h($lUrl) ?>" placeholder="https://example.com/">
+        </div>
+        <div class="ts-field">
+          <label>Подпись кнопки</label>
+          <input type="text" name="settings[label]" value="<?= h($lLabel) ?>" placeholder="Открыть">
+        </div>
+      </div>
+    </div>
+
+    <!-- FILE -->
+    <?php
+      $fLabel = (string)($settings['label'] ?? 'Открыть файл');
+      $fDiskId = (int)($settings['diskFileId'] ?? 0);
+      $fName = (string)($settings['fileName'] ?? '');
+    ?>
+    <div class="ts-type-box <?= ($type === 'FILE' ? 'is-show' : '') ?>" data-typebox="FILE">
+      <div class="ts-grid">
+        <div class="ts-field">
+          <label>Подпись кнопки</label>
+          <input type="text" name="settings[label]" value="<?= h($fLabel) ?>" placeholder="Открыть файл">
+        </div>
+        <div class="ts-field">
+          <label>Загрузить файл</label>
+          <input type="file" name="upload_file">
+          <?php if ($fDiskId > 0): ?>
+            <div class="ts-note">
+              Сейчас: Disk File ID <b><?= (int)$fDiskId ?></b>
+              <?php if ($fName !== ''): ?> · <?= h($fName) ?><?php endif; ?>
+              <br>Если загрузишь новый файл — он заменит ссылку в этом блоке.
+            </div>
+          <?php else: ?>
+            <div class="ts-note">Файл пока не выбран. После сохранения появится кнопка на странице.</div>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <!-- скрыто сохраняем старый diskFileId/fileName если файл не загружают -->
+      <input type="hidden" name="settings[diskFileId]" value="<?= (int)$fDiskId ?>">
+      <input type="hidden" name="settings[fileName]" value="<?= h($fName) ?>">
+    </div>
+
+    <div class="ts-row" style="margin-top:14px;justify-content:flex-end;">
+      <button class="ui-btn ui-btn-primary" type="submit">Сохранить</button>
+      <a class="ui-btn ui-btn-light" href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$pageId ?>">Отмена</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const sel = document.getElementById('ts-type');
+  const boxes = document.querySelectorAll('[data-typebox]');
+  function sync(){
+    const t = (sel.value || 'TEXT').toUpperCase();
+    boxes.forEach(b => {
+      b.classList.toggle('is-show', (b.getAttribute('data-typebox') === t));
+    });
+  }
+  sel.addEventListener('change', sync);
+  sync();
+})();
+</script>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
