@@ -1,38 +1,30 @@
 <?php
 // /local/typical_sites/folders.php
+
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
 
-
-require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
-
 use Bitrix\Main\Context;
-use Bitrix\Main\UI\Extension;
 use Bitrix\Main\Loader;
 
 global $USER, $APPLICATION;
 
-Extension::load([
-    "ui.buttons",
-    "ui.icons",
-    "ui.fonts.opensans",
-]);
-
-$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 function h($v): string { return htmlspecialcharsbx((string)$v); }
 
-$request = Context::getCurrent()->getRequest();
+$request  = Context::getCurrent()->getRequest();
+$code     = trim((string)$request->getQuery('code'));
+$folderId = (int)$request->getQuery('folder_id');
 
-$code = trim((string)$request->getQuery('code'));
-$folderId = (int)$request->getQuery('folder_id'); // текущая папка в Disk (если описано)
 if ($code === '') {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Не указан code сайта");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 if (!$USER->IsAuthorized()) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Требуется авторизация");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
@@ -42,16 +34,17 @@ $service = new \Cc10\SiteService();
 $site = $service->getSiteByCode($code);
 
 if (!$site || empty($site['UF_ACTIVE'])) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 $siteId = (int)$site['ID'];
-$role = $service->getUserRole((int)$USER->GetID(), $siteId);
+$role   = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-// Управлять папками могут: админ, ADMIN/DEVELOPER
 if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("У вас нет прав на управление папками");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
@@ -59,36 +52,39 @@ if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
 
 $diskRootId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
 if ($diskRootId <= 0) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("У сайта не задан UF_DISK_FOLDER_ID (папка сайта в Диске не создана)");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
 if (!Loader::includeModule('disk')) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Модуль disk не установлен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-// Если folder_id не задан — открываем корень сайта
+// если folder_id не задан — корень сайта
 if ($folderId <= 0) $folderId = $diskRootId;
 
-// Защита: не даём уйти вне дерева (проверим, что folderId внутри root)
+// текущая папка
+$currentFolder = null;
 try {
     $currentFolder = \Bitrix\Disk\Folder::loadById($folderId);
-} catch (\Throwable $e) {
-    $currentFolder = null;
-}
+} catch (\Throwable $e) {}
+
 if (!$currentFolder) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Папка не найдена в Диске: " . (int)$folderId);
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-// Проверка принадлежности текущей папки корню сайта: поднимаемся вверх до root
-$cursor = $currentFolder;
+// проверка, что папка внутри дерева root
+$cursor  = $currentFolder;
 $belongs = false;
-$guard = 0;
+$guard   = 0;
 while ($cursor && $guard < 200) {
     $guard++;
     if ((int)$cursor->getId() === $diskRootId) {
@@ -97,7 +93,9 @@ while ($cursor && $guard < 200) {
     }
     $cursor = $cursor->getParent();
 }
+
 if (!$belongs) {
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
     ShowError("Запрошенная папка не принадлежит сайту");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
@@ -105,29 +103,46 @@ if (!$belongs) {
 
 $errors = [];
 
-// Создание новой подпапки
+/**
+ * ВАЖНО: обработка POST ДО header.php
+ */
 if ($request->isPost() && check_bitrix_sessid()) {
     $newName = trim((string)$request->getPost('new_folder_name'));
-    if ($newName !== '') {
-        if (!method_exists($service, 'createDiskSubFolder')) {
-            $errors[] = "В SiteService нет метода createDiskSubFolder()";
-        } else {
-            try {
-                // создаём подпапку В ТЕКУЩЕЙ папке (не только в корне)
-                $newId = (int)$service->createDiskSubFolder((int)$currentFolder->getId(), $newName);
-                LocalRedirect('/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$currentFolder->getId());
-            } catch (\Throwable $e) {
-                $errors[] = $e->getMessage();
-            }
-        }
-    } else {
+
+    if ($newName === '') {
         $errors[] = "Название папки не может быть пустым";
+    } elseif (!method_exists($service, 'createDiskSubFolder')) {
+        $errors[] = "В SiteService нет метода createDiskSubFolder()";
+    } else {
+        try {
+            $service->createDiskSubFolder((int)$currentFolder->getId(), $newName);
+
+            LocalRedirect(
+                '/local/typical_sites/folders.php?code=' . urlencode($code) .
+                '&folder_id=' . (int)$currentFolder->getId()
+            );
+            die();
+        } catch (\Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
     }
 }
 
+// --- теперь можно подключать header.php (после редиректов) ---
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
+use Bitrix\Main\UI\Extension;
 
-// Хлебные крошки (от root до текущей)
+Extension::load([
+    "ui.buttons",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
+
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
+$APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
+
+// хлебные крошки
 $breadcrumbs = [];
 $cursor = $currentFolder;
 $guard = 0;
@@ -142,17 +157,16 @@ while ($cursor && $guard < 200) {
 }
 $breadcrumbs = array_reverse($breadcrumbs);
 
-// Список объектов в текущей папке (папки + файлы) через ObjectTable
+// список объектов в папке
 $items = \Bitrix\Disk\Internals\ObjectTable::getList([
     'select' => ['ID', 'NAME', 'TYPE', 'CREATE_TIME', 'UPDATE_TIME'],
     'filter' => [
         '=PARENT_ID' => (int)$currentFolder->getId(),
         '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
     ],
-    'order' => ['TYPE' => 'DESC', 'NAME' => 'ASC'], // папки сверху (обычно TYPE_FOLDER > TYPE_FILE), затем по имени
+    'order' => ['TYPE' => 'DESC', 'NAME' => 'ASC'],
 ])->fetchAll();
 
-// Разделим на папки и файлы
 $folders = [];
 $files = [];
 
@@ -165,8 +179,6 @@ foreach ($items as $it) {
 }
 
 $urlManager = \Bitrix\Disk\Driver::getInstance()->getUrlManager();
-
-$APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
 ?>
 <style>
 .ts-wrap{max-width:1100px;margin:0 auto;padding:0 12px 28px;}
@@ -193,7 +205,6 @@ $APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
 </style>
 
 <div class="ts-wrap">
-
   <div class="ts-head">
     <div>
       <h1 class="ts-title">Папки сайта</h1>
@@ -231,7 +242,9 @@ $APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
     </div>
 
     <div style="margin-top:12px;">
-      <form method="post" action="/local/typical_sites/folder.php?code=<? urlencode($code) ?>&folder_id=<?= (int)$currentFolder->getId() ?>" class="ts-row">
+      <form method="post"
+            action="/local/typical_sites/folders.php?code=<?= urlencode($code) ?>&folder_id=<?= (int)$currentFolder->getId() ?>"
+            class="ts-row">
         <?= bitrix_sessid_post() ?>
         <div class="ts-field" style="min-width:280px;flex:1;">
           <label>Создать подпапку в текущей папке</label>
@@ -252,9 +265,7 @@ $APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
           <div class="ts-meta">Подпапок нет.</div>
         <?php else: ?>
           <?php foreach ($folders as $f): ?>
-            <?php
-              $openUrl = '/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$f['ID'];
-            ?>
+            <?php $openUrl = '/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$f['ID']; ?>
             <div class="ts-item">
               <div class="ts-name">
                 <span class="ui-icon ui-icon-folder" style="opacity:.75;"></span>
