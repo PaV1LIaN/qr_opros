@@ -1,1 +1,32 @@
-Bitrix\Disk\Folder::addSubFolder(): Argument #2 ($rights) must be of type array, int given, called in /var/www/html/bx-site/local/typical_sites/lib/SiteService.php on line 1285
+public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
+    }
+
+    if ($diskFolderId <= 0) {
+        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
+    }
+
+    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
+        throw new \Exception('Файл не загружен или ошибка загрузки');
+    }
+
+    $folder = \Bitrix\Disk\Folder::loadById($diskFolderId);
+    if (!$folder) {
+        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
+    }
+
+    $diskFile = $folder->uploadFile(
+        $file,
+        ['NAME' => (string)($file['name'] ?? 'file')],
+        [],
+        true
+    );
+
+    if (!$diskFile) {
+        throw new \Exception('Не удалось загрузить файл в Disk');
+    }
+
+    return (int)$diskFile->getId();
+}
