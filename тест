@@ -1,5 +1,8 @@
 <?php
 // /local/typical_sites/folders.php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/modules/main/include/prolog_before.php");
+
+
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
@@ -122,6 +125,8 @@ if ($request->isPost() && check_bitrix_sessid()) {
     }
 }
 
+
+
 // Хлебные крошки (от root до текущей)
 $breadcrumbs = [];
 $cursor = $currentFolder;
@@ -226,7 +231,7 @@ $APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
     </div>
 
     <div style="margin-top:12px;">
-      <form method="post" class="ts-row">
+      <form method="post" action="/local/typical_sites/folder.php?code=<? urlencode($code) ?>&folder_id=<?= (int)$currentFolder->getId() ?>" class="ts-row">
         <?= bitrix_sessid_post() ?>
         <div class="ts-field" style="min-width:280px;flex:1;">
           <label>Создать подпапку в текущей папке</label>
