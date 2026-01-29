@@ -1,43 +1,46 @@
-public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file, int $userId = 0): int
+public function createDiskSubFolder(int $parentFolderId, string $name): int
 {
     if (!Loader::includeModule('disk')) {
         throw new \Exception('Модуль disk не установлен');
     }
 
-    if ($diskFolderId <= 0) {
-        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
+    $name = trim($name);
+    if ($name === '') {
+        throw new \InvalidArgumentException('Название папки не может быть пустым');
     }
 
-    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
-        throw new \Exception('Файл не загружен или ошибка загрузки');
+    // простая защита от странных имён
+    $name = preg_replace('~[\/\\\\:*?"<>|]+~', '_', $name);
+    $name = trim($name);
+    if ($name === '') {
+        throw new \InvalidArgumentException('Недопустимое название папки');
     }
 
-    if ($userId <= 0) {
-        $userId = $this->getCurrentUserId();
-    }
-    if ($userId <= 0) {
-        throw new \Exception('Не удалось определить CREATED_BY (userId)');
+    $parent = \Bitrix\Disk\Folder::loadById($parentFolderId);
+    if (!$parent) {
+        throw new \Exception('Родительская папка Disk не найдена: ' . $parentFolderId);
     }
 
-    $folder = \Bitrix\Disk\Folder::loadById($diskFolderId);
-    if (!$folder) {
-        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
-    }
-
-    $diskFile = $folder->uploadFile(
-        $file,
-        [
-            'NAME'       => (string)($file['name'] ?? 'file'),
-            'CREATED_BY' => $userId,
-            'UPDATED_BY' => $userId,
+    // попробуем найти существующую подпапку с таким именем
+    $row = \Bitrix\Disk\Internals\ObjectTable::getList([
+        'select' => ['ID'],
+        'filter' => [
+            '=PARENT_ID' => (int)$parent->getId(),
+            '=NAME'      => $name,
+            '=TYPE'      => \Bitrix\Disk\Internals\ObjectTable::TYPE_FOLDER,
+            '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
         ],
-        [],
-        true
-    );
+        'limit' => 1,
+    ])->fetch();
 
-    if (!$diskFile) {
-        throw new \Exception('Не удалось загрузить файл в Disk');
+    if ($row) {
+        return (int)$row['ID'];
     }
 
-    return (int)$diskFile->getId();
+    $folder = $parent->addSubFolder(['NAME' => $name]);
+    if (!$folder) {
+        throw new \Exception('Не удалось создать подпапку в Disk');
+    }
+
+    return (int)$folder->getId();
 }
