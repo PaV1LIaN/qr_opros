@@ -1,2 +1,52 @@
-Управление типовыми сайтами
-Не найден storage shared_files (Диск компании)
+public function ensureSiteDiskFolder(int $siteId, string $siteCode, string $siteName = '', int $userId = 0): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
+    }
+
+    $driver = Driver::getInstance();
+
+    // 1) правильный commonId для "Диск компании"
+    $commonId = 'shared_files_' . (defined('SITE_ID') ? SITE_ID : '');
+    $storage = $driver->getStorageByCommonId($commonId);
+
+    // 2) fallback на старый вариант (на всякий случай)
+    if (!$storage) {
+        $storage = $driver->getStorageByCommonId('shared_files');
+    }
+
+    if (!$storage) {
+        throw new \Exception('Не найден storage Диска компании (пробовали: ' . $commonId . ' и shared_files)');
+    }
+
+    $root = $storage->getRootObject();
+    if (!$root) {
+        throw new \Exception('Не найден root folder Диска компании');
+    }
+
+    $folderName = 'TS_' . $this->normalizeSlug($siteCode);
+
+    $site = $this->getSiteById($siteId);
+    $existingId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+    if ($existingId > 0) {
+        return $existingId;
+    }
+
+    $children = $root->getChildren([
+        'filter' => ['=NAME' => $folderName],
+        'limit'  => 1,
+    ]);
+
+    if (!empty($children)) {
+        return (int)$children[0]->getId();
+    }
+
+    if ($userId <= 0) $userId = $this->getCurrentUserId();
+
+    $folder = $root->addSubFolder(['NAME' => $folderName], $userId);
+    if (!$folder) {
+        throw new \Exception('Не удалось создать папку в Диске компании');
+    }
+
+    return (int)$folder->getId();
+}
