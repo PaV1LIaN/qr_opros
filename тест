@@ -2,28 +2,56 @@
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
-use Bitrix\Main\Loader;
 use Bitrix\Main\UI\Extension;
-
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 global $USER, $APPLICATION;
 
 Extension::load([
     "ui.buttons",
-    "ui.alerts",
     "ui.icons",
     "ui.fonts.opensans",
 ]);
 
 $APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
 $request = Context::getCurrent()->getRequest();
+
+// ----------------------------
+// Pretty URLs router
+// Формат:
+//   /ts/<code>/           -> HOME
+//   /ts/<code>/<slug>/    -> page=slug
+// При этом старые query тоже поддерживаем:
+//   site.php?code=<code>&page=<slug>
+// ----------------------------
 $code = trim((string)$request->getQuery('code'));
-$pageId = (int)$request->getQuery('page_id');
+$pageSlug = trim((string)$request->getQuery('page'));
+
+$route = trim((string)$request->getQuery('route')); // если настроишь rewrite через ?route=...
+if ($code === '' && ($route !== '')) {
+    $route = trim($route, "/");
+    $parts = explode("/", $route);
+    $code = trim((string)($parts[0] ?? ''));
+    $pageSlug = trim((string)($parts[1] ?? ''));
+}
+
+// парсим REQUEST_URI для /ts/<code>/<slug>/ если code не пришёл query/route
+if ($code === '') {
+    $uri = (string)($_SERVER['REQUEST_URI'] ?? '');
+    $path = parse_url($uri, PHP_URL_PATH);
+    $path = (string)$path;
+
+    // ожидаем префикс /ts/
+    if (preg_match('~^/ts/([^/]+)(?:/([^/]+))?/?$~', $path, $m)) {
+        $code = trim((string)($m[1] ?? ''));
+        $pageSlug = trim((string)($m[2] ?? '')); // может быть пусто => HOME
+    }
+}
 
 if ($code === '') {
-    ShowError("Не указан code");
+    ShowError("Не указан code сайта");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
@@ -37,7 +65,7 @@ if (!$USER->IsAuthorized()) {
 $service = new \Cc10\SiteService();
 $site = $service->getSiteByCode($code);
 
-if (!$site) {
+if (!$site || empty($site['UF_ACTIVE'])) {
     ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
@@ -46,289 +74,444 @@ if (!$site) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
-// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
-if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на редактирование страниц");
+// На сайт пускаем:
+// - глобального администратора
+// - или тех, у кого есть роль VIEWER/ADMIN/DEVELOPER на этом сайте
+if (
+    !$USER->IsAdmin()
+    && !in_array($role, ['VIEWER', 'ADMIN', 'DEVELOPER'], true)
+) {
+    ShowError("У вас нет доступа к этому сайту");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-$errors = [];
-$page = null;
+// активные страницы сайта
+$pages = $service->getPagesForSite($siteId, true);
 
-if ($pageId > 0) {
-    $page = $service->getPageById($pageId);
-    if (!$page) {
-        $errors[] = "Страница не найдена";
-        $pageId = 0;
-    } elseif ((int)$page['UF_SITE'] !== $siteId) {
-        $errors[] = "Страница не принадлежит этому сайту";
-        $page = null;
-        $pageId = 0;
-    }
-}
-
-// HOME slug сайта (для дефолта чекбокса)
+// HOME slug сайта
 $homeSlug = trim((string)($site['UF_HOME_SLUG'] ?? ''));
 
-if ($request->isPost() && check_bitrix_sessid()) {
-    $title = (string)$request->getPost('TITLE');
-    $slug  = (string)$request->getPost('SLUG');
-    $sort  = (int)$request->getPost('SORT');
+// выбираем текущую страницу
+$currentPage = null;
+if (!empty($pages)) {
 
-    // ACTIVE у тебя через select, поэтому читаем как строку
-    $active = ((string)$request->getPost('ACTIVE') === 'Y');
-
-    $content = (string)$request->getPost('CONTENT');
-
-    // новый чекбокс
-    $makeHome = ((string)$request->getPost('MAKE_HOME') === 'Y');
-
-    try {
-        $slug = mb_strtolower(trim($slug));
-        $slug = $service->validateSlug($slug);
-        $service->assertPageSlugUnique($siteId, $slug, $pageId);
-
-        if ($pageId > 0) {
-            $service->updatePage($pageId, $siteId, [
-                'TITLE' => $title,
-                'SLUG' => $slug,
-                'SORT' => $sort,
-                'ACTIVE' => $active,
-                'CONTENT' => $content,
-            ]);
-
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
-                'title' => $title,
-                'slug' => $slug,
-                'sort' => $sort,
-                'active' => $active,
-            ]);
-
-        } else {
-            $newPageId = $service->addPage($siteId, [
-                'TITLE' => $title,
-                'SLUG' => $slug,
-                'SORT' => $sort,
-                'ACTIVE' => $active,
-                'CONTENT' => $content,
-            ]);
-
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
-                'title' => $title,
-                'slug' => $slug,
-                'sort' => $sort,
-                'active' => $active,
-            ]);
-
-            $pageId = (int)$newPageId;
-        }
-
-        // если выбрали "Сделать главной" — ставим UF_HOME_SLUG
-        if ($makeHome) {
-            if (!method_exists($service, 'updateSiteSettings')) {
-                throw new \RuntimeException("В SiteService нет метода updateSiteSettings()");
+    // если slug не передан (или пришли /ts/<code>/) — открываем HOME_SLUG (если есть),
+    // иначе ищем index, иначе первую
+    if ($pageSlug === '') {
+        if ($homeSlug !== '') {
+            foreach ($pages as $p) {
+                if ((string)$p['UF_SLUG'] === $homeSlug) {
+                    $currentPage = $p;
+                    break;
+                }
             }
-            $service->updateSiteSettings($siteId, ['HOME_SLUG' => $slug]);
-            $service->logAction($siteId, (int)$USER->GetID(), 'SITE_HOME_SET', 'site', $siteId, ['home_slug' => $slug]);
         }
 
-        LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
-    } catch (\Throwable $e) {
-        $errors[] = $e->getMessage();
+        if (!$currentPage) {
+            foreach ($pages as $p) {
+                if ((string)$p['UF_SLUG'] === 'index') {
+                    $currentPage = $p;
+                    break;
+                }
+            }
+        }
+
+        if (!$currentPage) {
+            $currentPage = $pages[0];
+        }
+    } else {
+        foreach ($pages as $p) {
+            if ((string)$p['UF_SLUG'] === $pageSlug) {
+                $currentPage = $p;
+                break;
+            }
+        }
+        if (!$currentPage) {
+            // fallback — если slug не найден
+            // попробуем HOME_SLUG, иначе первую
+            if ($homeSlug !== '') {
+                foreach ($pages as $p) {
+                    if ((string)$p['UF_SLUG'] === $homeSlug) {
+                        $currentPage = $p;
+                        break;
+                    }
+                }
+            }
+            if (!$currentPage) $currentPage = $pages[0];
+        }
     }
 }
 
-// значения для формы (учитываем POST при ошибке)
-$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
-$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
-$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
-$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
-if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
-    $activeValue = 'N';
-}
-$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
+$APPLICATION->SetTitle((string)$site['UF_NAME']);
 
-// дефолт чекбокса MAKE_HOME:
-// - если POST был (ошибка) — берём из POST
-// - иначе если редактируем страницу и она сейчас HOME — true
-$makeHomeValue = $_POST['MAKE_HOME'] ?? '';
-if ($makeHomeValue === '') {
-    $makeHomeChecked = ($pageId > 0 && $homeSlug !== '' && (string)$slugValue === $homeSlug);
-} else {
-    $makeHomeChecked = ($makeHomeValue === 'Y');
-}
+// URL helpers (красивые)
+$prettyBase = '/ts/' . rawurlencode($code) . '/';
+$makePageUrl = function(string $slug) use ($prettyBase, $homeSlug): string {
+    $slug = trim($slug);
+    if ($slug === '') return $prettyBase;
+    if ($homeSlug !== '' && $slug === $homeSlug) return $prettyBase; // главная без slug
+    return $prettyBase . rawurlencode($slug) . '/';
+};
 
-$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
-
-$backUrl = '/local/typical_sites/pages.php?code=' . urlencode($code);
-$openSiteUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
-$openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode((string)$slugValue);
 ?>
-
 <style>
-.ts-formCard{
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
-  padding: 14px 16px;
+/* layout для просмотра сайта */
+.ts-site-wrapper{
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 12px 32px;
 }
-.ts-grid2{display:grid;grid-template-columns: 1fr 260px 160px;gap:12px;}
-@media (max-width: 980px){ .ts-grid2{grid-template-columns:1fr;} }
-
-.ts-field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:700;}
-.ts-field input[type="text"], .ts-field input[type="number"], .ts-field select{
-  width:100%;
-  height:38px;
-  border:1px solid rgba(31,36,48,.14);
-  background: rgba(255,255,255,.92);
-  border-radius:12px;
-  padding: 0 12px;
-  outline:none;
-}
-.ts-field input:focus, .ts-field select:focus{
-  border-color: rgba(91,124,255,.45);
-  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
-}
-.ts-help{margin-top:8px;color: var(--muted);font-size: 12px;}
-.ts-hr{height:1px;background: rgba(231,233,242,.9);margin:14px 0;border:0;}
-
-.ts-checkRow{
+.ts-site-header{
+  padding: 18px 0 10px;
   display:flex;
-  gap:10px;
-  align-items:center;
-  padding:10px 12px;
-  border:1px solid rgba(31,36,48,.10);
-  background: rgba(248,249,255,.65);
-  border-radius: 14px;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
 }
-.ts-checkRow input{ transform: scale(1.05); }
-.ts-checkRow b{ font-size:13px; }
+.ts-site-title{
+  font-size:24px;
+  font-weight:800;
+  margin:0;
+}
+.ts-site-sub{
+  font-size:13px;
+  color:var(--muted);
+}
+.ts-site-actions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.ts-site-tabs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin:12px 0 16px;
+  border-bottom:1px solid rgba(231,233,242,.9);
+  padding-bottom:4px;
+}
+.ts-site-tab{
+  border-radius:999px;
+  padding:6px 12px;
+  font-size:13px;
+  border:1px solid transparent;
+  cursor:pointer;
+  text-decoration:none;
+  color:rgba(31,36,48,.8);
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+}
+.ts-site-tab.is-active{
+  border-color:rgba(91,124,255,.50);
+  background:rgba(91,124,255,.12);
+  color:rgba(31,36,48,.95);
+}
+.ts-site-tab.is-home{
+  border-color: rgba(34,197,94,.35);
+  background: rgba(34,197,94,.08);
+}
+.ts-site-tab span.slug{
+  font-size:11px;
+  opacity:.7;
+  margin-left:4px;
+}
+.ts-home-badge{
+  font-size:11px;
+  padding:2px 8px;
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.30);
+  background:rgba(34,197,94,.10);
+  color:rgba(22,101,52,.95);
+  font-weight:800;
+}
+.ts-site-main{
+  display:grid;
+  grid-template-columns: minmax(0,1.9fr) minmax(0,1.1fr);
+  gap:18px;
+}
+@media (max-width: 980px){
+  .ts-site-main{grid-template-columns:1fr;}
+}
+.ts-site-content{
+  background:#ffffff;
+  border-radius:18px;
+  border:1px solid var(--line);
+  box-shadow:var(--shadow);
+  padding:16px 18px;
+}
+.ts-site-content h2{
+  margin-top:0;
+}
+.ts-site-blocks{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.ts-site-block{
+  border-radius:14px;
+  border:1px solid rgba(31,36,48,.08);
+  background:rgba(248,249,255,.9);
+  padding:10px 12px;
+}
+.ts-site-block-title{
+  font-size:12px;
+  font-weight:700;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+.ts-site-panel{
+  background:rgba(248,249,255,.98);
+  border-radius:18px;
+  border:1px solid rgba(31,36,48,.06);
+  padding:14px;
+}
+.ts-site-panel-title{
+  font-size:13px;
+  font-weight:700;
+  margin-bottom:8px;
+}
+.ts-site-panel ul{
+  margin:0;
+  padding-left:18px;
+  font-size:13px;
+  color:var(--muted);
+}
+.ts-site-empty{
+  padding:18px;
+  border-radius:16px;
+  border:1px dashed rgba(148,163,184,.8);
+  background:rgba(248,250,252,.9);
+  font-size:13px;
+}
+/* iframe */
+.ts-site-iframe{
+  width:100%;
+  border-radius:12px;
+  border:1px solid rgba(148,163,184,.6);
+}
+/* ссылка-блок */
+.ts-site-link-btn{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border-radius:999px;
+  padding:8px 14px;
+  border:1px solid rgba(37,99,235,.35);
+  background:rgba(37,99,235,.06);
+  text-decoration:none;
+  font-size:13px;
+}
+.ts-site-link-btn:hover{
+  background:rgba(37,99,235,.12);
+}
+/* badge ролей */
+.ts-role-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border-radius:999px;
+  padding:4px 9px;
+  font-size:11px;
+  border:1px solid rgba(31,36,48,.16);
+  background:#fff;
+}
+.ts-role-badge .dot{
+  width:7px;height:7px;border-radius:999px;
+}
+.ts-role-badge.viewer .dot{background:#3b82f6;}
+.ts-role-badge.admin .dot{background:#f59e0b;}
+.ts-role-badge.developer .dot{background:#8b5cf6;}
 </style>
 
-<div class="ts-page">
+<div class="ts-site-wrapper">
 
-  <div class="ts-hero">
-    <div class="ts-heroTop">
-      <div>
-        <h1 class="ts-title"><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы</h1>
-        <div class="ts-sub">
-          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b>
-          <?php if ($pageId > 0): ?>
-            · SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$slugValue) ?></span>
-          <?php endif; ?>
-          <?php if ($homeSlug !== ''): ?>
-            · HOME: <span class="ts-code"><?= htmlspecialcharsbx($homeSlug) ?></span>
-          <?php endif; ?>
-        </div>
-      </div>
-
-      <div class="ts-actions">
-        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Назад к страницам</a>
-        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openSiteUrl) ?>" target="_blank">Открыть сайт</a>
-        <?php if ($pageId > 0): ?>
-          <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openPageUrl) ?>" target="_blank">Открыть страницу</a>
+  <div class="ts-site-header">
+    <div>
+      <h1 class="ts-site-title"><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+      <div class="ts-site-sub">
+        CODE: <span class="ts-code"><?= htmlspecialcharsbx((string)$site['UF_CODE']) ?></span>
+        <?php if ($role): ?>
+          &nbsp;·&nbsp;
+          <span class="ts-role-badge <?= strtolower($role) ?>">
+            <span class="dot"></span> Ваша роль: <?= htmlspecialcharsbx($role) ?>
+          </span>
         <?php endif; ?>
-        <button class="ui-btn ts-primary" type="submit" form="ts-page-form">
-          <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
-        </button>
+        <?php if ($homeSlug !== ''): ?>
+          &nbsp;·&nbsp; HOME: <span class="ts-code"><?= htmlspecialcharsbx($homeSlug) ?></span>
+        <?php endif; ?>
       </div>
+    </div>
+
+    <div class="ts-site-actions">
+      <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+        <a class="ui-btn ts-ghost" href="/local/typical_sites/admin.php">Все сайты</a>
+        <a class="ui-btn ts-ghost" href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">Страницы</a>
+        <?php if (!empty($currentPage)): ?>
+          <a class="ui-btn ts-ghost" href="/local/typical_sites/blocks.php?code=<?= urlencode($code) ?>&page_id=<?= (int)$currentPage['ID'] ?>">Блоки текущей страницы</a>
+        <?php endif; ?>
+        <a class="ui-btn ts-ghost" href="/local/typical_sites/access_manage.php?code=<?= urlencode($code) ?>">Доступы</a>
+        <a class="ui-btn ts-ghost" href="/local/typical_sites/folders.php?code=<?= urlencode($code) ?>">Папки</a>
+      <?php endif; ?>
     </div>
   </div>
 
-  <?php if (!empty($errors)): ?>
-    <div class="ui-alert ui-alert-danger">
-      <span class="ui-alert-message">
-        <?php foreach ($errors as $e): ?>
-          <div><?= htmlspecialcharsbx($e) ?></div>
-        <?php endforeach; ?>
-      </span>
-    </div>
-  <?php endif; ?>
+  <?php if (empty($pages)): ?>
 
-  <form method="post" id="ts-page-form" class="ts-formCard">
-    <?= bitrix_sessid_post() ?>
-
-    <div class="ts-grid2">
-      <div class="ts-field">
-        <label>Заголовок</label>
-        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" placeholder="Например: Главная, О компании, Контакты">
-      </div>
-
-      <div class="ts-field">
-        <label>SLUG (часть URL)</label>
-        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" placeholder="about">
-        <div class="ts-help">латиница/цифры/ - _ (например: about)</div>
-      </div>
-
-      <div class="ts-field">
-        <label>Сортировка</label>
-        <input type="number" name="SORT" value="<?= (int)$sortValue ?>">
-      </div>
+    <div class="ts-site-empty">
+      У этого сайта пока нет активных страниц.
+      <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+        <br>Перейдите в раздел <b>Страницы</b>, чтобы создать первую страницу.
+      <?php endif; ?>
     </div>
 
-    <div class="ts-grid2" style="grid-template-columns: 220px 1fr 1fr; margin-top:12px;">
-      <div class="ts-field">
-        <label>Активна</label>
-        <select name="ACTIVE">
-          <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
-          <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
-        </select>
-      </div>
+  <?php else: ?>
 
-      <div class="ts-field" style="padding-top:22px;">
-        <div class="ts-checkRow">
-          <input type="checkbox" id="MAKE_HOME" name="MAKE_HOME" value="Y" <?= ($makeHomeChecked ? 'checked' : '') ?>>
-          <label for="MAKE_HOME" style="margin:0; cursor:pointer;">
-            <b>Сделать главной</b>
-            <div class="ts-help" style="margin:4px 0 0;">
-              выставит <span class="ts-code">UF_HOME_SLUG</span> = текущему SLUG
+    <div class="ts-site-tabs">
+      <?php foreach ($pages as $p): ?>
+        <?php
+          $slug = (string)$p['UF_SLUG'];
+          $title = (string)$p['UF_TITLE'];
+
+          $isHomeTab = ($homeSlug !== '' && $slug === $homeSlug);
+          $isActiveTab = ($currentPage && (int)$currentPage['ID'] === (int)$p['ID']);
+
+          $tabUrl = $makePageUrl($slug);
+        ?>
+        <a class="ts-site-tab <?= $isActiveTab ? 'is-active' : '' ?> <?= $isHomeTab ? 'is-home' : '' ?>"
+           href="<?= htmlspecialcharsbx($tabUrl) ?>">
+          <?= htmlspecialcharsbx($title !== '' ? $title : $slug) ?>
+          <?php if ($isHomeTab): ?>
+            <span class="ts-home-badge">HOME</span>
+          <?php endif; ?>
+          <span class="slug"><?= htmlspecialcharsbx($slug) ?></span>
+        </a>
+      <?php endforeach; ?>
+    </div>
+
+    <?php
+    // Рендер текущей страницы + блоков
+    $blocks = [];
+    if ($currentPage) {
+        $blocks = $service->getBlocksForPage($siteId, (int)$currentPage['ID'], true);
+    }
+    ?>
+
+    <div class="ts-site-main">
+      <div class="ts-site-content">
+        <?php if ($currentPage): ?>
+          <h2><?= htmlspecialcharsbx((string)$currentPage['UF_TITLE']) ?></h2>
+
+          <?php if (!empty($currentPage['UF_CONTENT'])): ?>
+            <div class="ts-site-block">
+              <div class="ts-site-block-title">Контент страницы</div>
+              <div>
+                <?= $currentPage['UF_CONTENT'] // HTML уже от админа, не экранируем ?>
+              </div>
             </div>
-          </label>
-        </div>
+          <?php endif; ?>
+
+          <?php if (!empty($blocks)): ?>
+            <div class="ts-site-blocks">
+              <?php foreach ($blocks as $b): ?>
+                <?php
+                  if (empty($b['UF_ACTIVE'])) continue;
+
+                  $type = (string)$b['UF_TYPE'];
+                  $title = (string)$b['UF_TITLE'];
+                  $settings = $service->decodeSettings((string)$b['UF_SETTINGS']);
+                ?>
+                <div class="ts-site-block">
+                  <?php if ($title !== ''): ?>
+                    <div class="ts-site-block-title">
+                      <?= htmlspecialcharsbx($title) ?> (<?= htmlspecialcharsbx($type) ?>)
+                    </div>
+                  <?php else: ?>
+                    <div class="ts-site-block-title">
+                      Блок (<?= htmlspecialcharsbx($type) ?>)
+                    </div>
+                  <?php endif; ?>
+
+                  <?php if ($type === 'TEXT'): ?>
+                    <div>
+                      <?= (string)($settings['html'] ?? '') ?>
+                    </div>
+
+                  <?php elseif ($type === 'IFRAME'): ?>
+                    <?php
+                      $url = (string)($settings['url'] ?? '');
+                      $height = (int)($settings['height'] ?? 600);
+                      if ($height <= 0) $height = 600;
+                    ?>
+                    <?php if ($url !== ''): ?>
+                      <iframe class="ts-site-iframe"
+                              src="<?= htmlspecialcharsbx($url) ?>"
+                              style="height:<?= $height ?>px;"
+                              loading="lazy"></iframe>
+                    <?php else: ?>
+                      <div class="ts-site-empty">IFRAME URL не задан.</div>
+                    <?php endif; ?>
+
+                  <?php elseif ($type === 'LINK'): ?>
+                    <?php
+                      $url = (string)($settings['url'] ?? '');
+                      $label = (string)($settings['label'] ?? 'Открыть');
+                    ?>
+                    <?php if ($url !== ''): ?>
+                      <a class="ts-site-link-btn" href="<?= htmlspecialcharsbx($url) ?>" target="_blank">
+                        <?= htmlspecialcharsbx($label) ?>
+                      </a>
+                    <?php else: ?>
+                      <div class="ts-site-empty">Ссылка не задана.</div>
+                    <?php endif; ?>
+
+                  <?php else: ?>
+                    <div class="ts-site-empty">
+                      Неизвестный тип блока: <?= htmlspecialcharsbx($type) ?>.
+                    </div>
+                  <?php endif; ?>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php else: ?>
+            <div class="ts-site-empty">
+              На этой странице пока нет блоков.
+              <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+                <br>Перейдите в раздел <b>Блоки текущей страницы</b>, чтобы добавить первый блок.
+              <?php endif; ?>
+            </div>
+          <?php endif; ?>
+
+        <?php else: ?>
+          <div class="ts-site-empty">
+            Текущая страница не найдена.
+          </div>
+        <?php endif; ?>
       </div>
 
-      <div></div>
+      <div class="ts-site-panel">
+        <div class="ts-site-panel-title">О сайте</div>
+        <ul>
+          <li>Название: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b></li>
+          <li>CODE: <span class="ts-code"><?= htmlspecialcharsbx((string)$site['UF_CODE']) ?></span></li>
+          <li>Активен: <b><?= !empty($site['UF_ACTIVE']) ? 'Y' : 'N' ?></b></li>
+          <li>Страниц: <b><?= count($pages) ?></b></li>
+          <?php if ($homeSlug !== ''): ?>
+            <li>HOME_SLUG: <b><?= htmlspecialcharsbx($homeSlug) ?></b></li>
+          <?php endif; ?>
+          <li>URL: <a href="<?= htmlspecialcharsbx($prettyBase) ?>" target="_blank"><?= htmlspecialcharsbx($prettyBase) ?></a></li>
+        </ul>
+        <?php if ($USER->IsAdmin() || in_array($role, ['ADMIN','DEVELOPER'], true)): ?>
+          <div style="margin-top:10px;font-size:12px;color:var(--muted);">
+            Используй кнопки сверху, чтобы перейти в управление страницами, блоками и доступами.
+          </div>
+        <?php endif; ?>
+      </div>
     </div>
 
-    <hr class="ts-hr">
-
-    <div class="ts-field">
-      <label>Контент (HTML)</label>
-      <?php
-      if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
-          \CFileMan::AddHTMLEditorFrame(
-              "CONTENT",
-              $contentValue,
-              "CONTENT_TYPE",
-              "html",
-              ["height" => 320, "width" => "100%"],
-              "N",
-              0,
-              "",
-              "",
-              false,
-              true,
-              true
-          );
-      } else {
-          ?>
-          <textarea name="CONTENT" style="width:100%; height:320px; border-radius:12px; border:1px solid rgba(31,36,48,.14); padding:10px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
-          <?php
-      }
-      ?>
-      <div class="ts-help">HTML хранится в UF_CONTENT. Блоки страницы (blocks) рендерятся отдельно.</div>
-    </div>
-
-    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="ui-btn ts-primary" type="submit">
-        <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
-      </button>
-      <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Отмена</a>
-    </div>
-
-  </form>
+  <?php endif; ?>
 
 </div>
 
