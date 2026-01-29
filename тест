@@ -1,18 +1,5 @@
-public function listDiskFolders(int $parentFolderId): array
-{
-    if (!Loader::includeModule('disk')) {
-        return [];
-    }
-
-    $rows = \Bitrix\Disk\Internals\ObjectTable::getList([
-        'select' => ['ID', 'NAME'],
-        'filter' => [
-            '=PARENT_ID' => $parentFolderId,
-            '=TYPE'      => \Bitrix\Disk\Internals\ObjectTable::TYPE_FOLDER,
-            '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
-        ],
-        'order' => ['NAME' => 'ASC'],
-    ])->fetchAll();
-
-    return $rows ?: [];
+$diskRootId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+$diskFolders = [];
+if ($diskRootId > 0 && method_exists($service, 'listDiskFolders')) {
+    $diskFolders = $service->listDiskFolders($diskRootId); // [{ID, NAME}, ...]
 }
