@@ -1,23 +1,406 @@
-<div class="ts-actions">
-  <a class="ui-btn ui-btn-light" href="<?= h($openUrl) ?>">Открыть</a>
+<?php
+// /local/typical_sites/folders.php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
-  <!-- Переименовать -->
-  <button class="ui-btn ui-btn-light" type="button"
-          onclick="var n=prompt('Новое имя папки:', '<?= h($f['NAME']) ?>'); if(!n) return; document.getElementById('rn<?= (int)$f['ID'] ?>').value=n; document.getElementById('frm<?= (int)$f['ID'] ?>').submit();">
-    Переименовать
-  </button>
-  <form method="post" id="frm<?= (int)$f['ID'] ?>" style="display:none;">
-    <?= bitrix_sessid_post() ?>
-    <input type="hidden" name="act" value="rename">
-    <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
-    <input type="hidden" name="new_name" id="rn<?= (int)$f['ID'] ?>" value="">
-  </form>
+use Bitrix\Main\Context;
+use Bitrix\Main\UI\Extension;
+use Bitrix\Main\Loader;
 
-  <!-- Удалить -->
-  <form method="post" style="display:inline;" onsubmit="return confirm('Удалить папку?');">
-    <?= bitrix_sessid_post() ?>
-    <input type="hidden" name="act" value="delete">
-    <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
-    <button class="ui-btn ui-btn-light" type="submit">Удалить</button>
-  </form>
+global $USER, $APPLICATION;
+
+Extension::load([
+    "ui.buttons",
+    "ui.icons",
+    "ui.fonts.opensans",
+]);
+
+$APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
+
+function h($v): string { return htmlspecialcharsbx((string)$v); }
+
+$request = Context::getCurrent()->getRequest();
+
+$code = trim((string)$request->getQuery('code'));
+$folderId = (int)$request->getQuery('folder_id');
+
+if ($code === '') {
+    ShowError("Не указан code сайта");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!$USER->IsAuthorized()) {
+    ShowError("Требуется авторизация");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$service = new \Cc10\SiteService();
+$site = $service->getSiteByCode($code);
+
+if (!$site || empty($site['UF_ACTIVE'])) {
+    ShowError("Сайт не найден или не активен");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$siteId = (int)$site['ID'];
+$role = $service->getUserRole((int)$USER->GetID(), $siteId);
+
+// Управлять папками могут: админ, ADMIN/DEVELOPER
+if (!$USER->IsAdmin() && !in_array($role, ['ADMIN','DEVELOPER'], true)) {
+    ShowError("У вас нет прав на управление папками");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$diskRootId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+if ($diskRootId <= 0) {
+    ShowError("У сайта не задан UF_DISK_FOLDER_ID (папка сайта в Диске не создана)");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+if (!Loader::includeModule('disk')) {
+    ShowError("Модуль disk не установлен");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Если folder_id не задан — открываем корень сайта
+if ($folderId <= 0) $folderId = $diskRootId;
+
+// Текущая папка
+try {
+    $currentFolder = \Bitrix\Disk\Folder::loadById($folderId);
+} catch (\Throwable $e) {
+    $currentFolder = null;
+}
+
+if (!$currentFolder) {
+    ShowError("Папка не найдена в Диске: " . (int)$folderId);
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+// Проверка принадлежности текущей папки корню сайта
+$cursor = $currentFolder;
+$belongs = false;
+$guard = 0;
+while ($cursor && $guard < 200) {
+    $guard++;
+    if ((int)$cursor->getId() === $diskRootId) {
+        $belongs = true;
+        break;
+    }
+    $cursor = $cursor->getParent();
+}
+if (!$belongs) {
+    ShowError("Запрошенная папка не принадлежит сайту");
+    require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
+    exit;
+}
+
+$errors = [];
+
+// -------------------- POST ACTIONS --------------------
+if ($request->isPost() && check_bitrix_sessid()) {
+    $act = trim((string)$request->getPost('act'));
+
+    // 1) Создание подпапки
+    if ($act === 'create_folder') {
+        $newName = trim((string)$request->getPost('new_folder_name'));
+        if ($newName === '') {
+            $errors[] = "Название папки не может быть пустым";
+        } elseif (!method_exists($service, 'createDiskSubFolder')) {
+            $errors[] = "В SiteService нет метода createDiskSubFolder()";
+        } else {
+            try {
+                $service->createDiskSubFolder((int)$currentFolder->getId(), $newName);
+                LocalRedirect('/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$currentFolder->getId());
+            } catch (\Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+    }
+
+    // 2) Переименование папки
+    if ($act === 'rename') {
+        $objId = (int)$request->getPost('obj_id');
+        $newName = trim((string)$request->getPost('new_name'));
+
+        if ($objId <= 0) {
+            $errors[] = "Некорректный obj_id";
+        } elseif ($newName === '') {
+            $errors[] = "Новое имя не может быть пустым";
+        } elseif (!method_exists($service, 'renameDiskFolder')) {
+            $errors[] = "В SiteService нет метода renameDiskFolder()";
+        } else {
+            try {
+                $service->renameDiskFolder($diskRootId, $objId, $newName);
+                LocalRedirect('/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$currentFolder->getId());
+            } catch (\Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+    }
+
+    // 3) Удаление папки
+    if ($act === 'delete') {
+        $objId = (int)$request->getPost('obj_id');
+
+        if ($objId <= 0) {
+            $errors[] = "Некорректный obj_id";
+        } elseif ($objId === $diskRootId) {
+            $errors[] = "Нельзя удалить корневую папку сайта";
+        } elseif (!method_exists($service, 'deleteDiskFolder')) {
+            $errors[] = "В SiteService нет метода deleteDiskFolder()";
+        } else {
+            try {
+                $service->deleteDiskFolder($diskRootId, $objId);
+                LocalRedirect('/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$currentFolder->getId());
+            } catch (\Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+    }
+
+    // 4) Загрузка файла
+    if ($act === 'upload') {
+        if (!method_exists($service, 'uploadFileToDiskFolderSafe')) {
+            $errors[] = "В SiteService нет метода uploadFileToDiskFolderSafe()";
+        } else {
+            try {
+                if (empty($_FILES['upload_file'])) {
+                    throw new \Exception('Файл не выбран');
+                }
+                $service->uploadFileToDiskFolderSafe(
+                    $diskRootId,
+                    (int)$currentFolder->getId(),
+                    $_FILES['upload_file'],
+                    (int)$USER->GetID()
+                );
+
+                LocalRedirect('/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$currentFolder->getId());
+            } catch (\Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+    }
+}
+// -------------------- /POST ACTIONS --------------------
+
+// Хлебные крошки (от root до текущей)
+$breadcrumbs = [];
+$cursor = $currentFolder;
+$guard = 0;
+while ($cursor && $guard < 200) {
+    $guard++;
+    $breadcrumbs[] = [
+        'ID' => (int)$cursor->getId(),
+        'NAME' => (string)$cursor->getName(),
+    ];
+    if ((int)$cursor->getId() === $diskRootId) break;
+    $cursor = $cursor->getParent();
+}
+$breadcrumbs = array_reverse($breadcrumbs);
+
+// Список объектов в текущей папке (папки + файлы)
+$items = \Bitrix\Disk\Internals\ObjectTable::getList([
+    'select' => ['ID', 'NAME', 'TYPE', 'CREATE_TIME', 'UPDATE_TIME'],
+    'filter' => [
+        '=PARENT_ID' => (int)$currentFolder->getId(),
+        '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
+    ],
+    'order' => ['TYPE' => 'DESC', 'NAME' => 'ASC'], // папки сверху
+])->fetchAll();
+
+$folders = [];
+$files = [];
+
+foreach ($items as $it) {
+    if ((int)$it['TYPE'] === \Bitrix\Disk\Internals\ObjectTable::TYPE_FOLDER) {
+        $folders[] = $it;
+    } elseif ((int)$it['TYPE'] === \Bitrix\Disk\Internals\ObjectTable::TYPE_FILE) {
+        $files[] = $it;
+    }
+}
+
+$urlManager = \Bitrix\Disk\Driver::getInstance()->getUrlManager();
+
+$APPLICATION->SetTitle("Папки сайта: " . (string)$site['UF_NAME']);
+?>
+<style>
+.ts-wrap{max-width:1100px;margin:0 auto;padding:0 12px 28px;}
+.ts-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin:12px 0 14px;}
+.ts-title{font-size:22px;font-weight:800;margin:0;}
+.ts-sub{font-size:13px;color:var(--muted);margin-top:4px;}
+.ts-card{background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:14px 16px;}
+.ts-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.ts-bc{font-size:13px;color:rgba(31,36,48,.85);display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.ts-bc a{text-decoration:none;color:rgba(37,99,235,.9);}
+.ts-bc .sep{opacity:.5;}
+.ts-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+@media(max-width:900px){.ts-grid{grid-template-columns:1fr;}}
+.ts-field label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px;font-weight:700;}
+.ts-field input[type="text"]{width:100%;border:1px solid rgba(148,163,184,.65);border-radius:12px;padding:10px 12px;font-size:14px;}
+.ts-list{margin-top:12px;}
+.ts-item{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 12px;border:1px solid rgba(31,36,48,.08);background:rgba(248,249,255,.9);border-radius:14px;}
+.ts-item + .ts-item{margin-top:8px;}
+.ts-name{display:flex;gap:10px;align-items:center;min-width:0;}
+.ts-name b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px;}
+.ts-meta{font-size:12px;color:var(--muted);}
+.ts-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center;}
+.ts-err{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.28);padding:10px 12px;border-radius:12px;margin-bottom:12px;font-size:13px;}
+.ts-upload input[type="file"]{max-width:340px;}
+</style>
+
+<div class="ts-wrap">
+
+  <div class="ts-head">
+    <div>
+      <h1 class="ts-title">Папки сайта</h1>
+      <div class="ts-sub">
+        Сайт: <b><?= h($site['UF_NAME']) ?></b> (<?= h($site['UF_CODE']) ?>)
+        <?php if ($role): ?> · Ваша роль: <b><?= h($role) ?></b><?php endif; ?>
+      </div>
+    </div>
+    <div class="ts-row">
+      <a class="ui-btn ui-btn-light" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>">Назад к просмотру</a>
+      <a class="ui-btn ui-btn-light" href="/local/typical_sites/pages.php?code=<?= urlencode($code) ?>">Страницы</a>
+    </div>
+  </div>
+
+  <?php if (!empty($errors)): ?>
+    <div class="ts-err">
+      <b>Ошибка:</b><br><?= implode('<br>', array_map('h', $errors)) ?>
+    </div>
+  <?php endif; ?>
+
+  <div class="ts-card">
+    <div class="ts-bc">
+      <?php foreach ($breadcrumbs as $i => $bc): ?>
+        <?php if ($i > 0): ?><span class="sep">/</span><?php endif; ?>
+        <?php
+          $isLast = ($i === count($breadcrumbs) - 1);
+          $url = '/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$bc['ID'];
+        ?>
+        <?php if ($isLast): ?>
+          <b><?= h($bc['NAME']) ?></b>
+        <?php else: ?>
+          <a href="<?= h($url) ?>"><?= h($bc['NAME']) ?></a>
+        <?php endif; ?>
+      <?php endforeach; ?>
+    </div>
+
+    <div style="margin-top:12px;">
+      <form method="post"
+            action="/local/typical_sites/folders.php?code=<?= urlencode($code) ?>&folder_id=<?= (int)$currentFolder->getId() ?>"
+            class="ts-row">
+        <?= bitrix_sessid_post() ?>
+        <input type="hidden" name="act" value="create_folder">
+        <div class="ts-field" style="min-width:280px;flex:1;">
+          <label>Создать подпапку в текущей папке</label>
+          <input type="text" name="new_folder_name" placeholder="Например: Документы / Счета / Проект 2026">
+        </div>
+        <div style="padding-top:22px;">
+          <button class="ui-btn ui-btn-primary" type="submit">Создать папку</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="ts-grid" style="margin-top:14px;">
+    <div class="ts-card">
+      <div style="font-weight:800;">Папки</div>
+      <div class="ts-list">
+        <?php if (empty($folders)): ?>
+          <div class="ts-meta">Подпапок нет.</div>
+        <?php else: ?>
+          <?php foreach ($folders as $f): ?>
+            <?php
+              $openUrl = '/local/typical_sites/folders.php?code=' . urlencode($code) . '&folder_id=' . (int)$f['ID'];
+            ?>
+            <div class="ts-item">
+              <div class="ts-name">
+                <span class="ui-icon ui-icon-folder" style="opacity:.75;"></span>
+                <b><?= h($f['NAME']) ?></b>
+              </div>
+              <div class="ts-actions">
+                <a class="ui-btn ui-btn-light" href="<?= h($openUrl) ?>">Открыть</a>
+
+                <!-- Переименовать -->
+                <button class="ui-btn ui-btn-light" type="button"
+                        onclick="var n=prompt('Новое имя папки:', '<?= h($f['NAME']) ?>'); if(!n) return; document.getElementById('rn<?= (int)$f['ID'] ?>').value=n; document.getElementById('frm<?= (int)$f['ID'] ?>').submit();">
+                  Переименовать
+                </button>
+                <form method="post" id="frm<?= (int)$f['ID'] ?>" style="display:none;">
+                  <?= bitrix_sessid_post() ?>
+                  <input type="hidden" name="act" value="rename">
+                  <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
+                  <input type="hidden" name="new_name" id="rn<?= (int)$f['ID'] ?>" value="">
+                </form>
+
+                <!-- Удалить -->
+                <form method="post" style="display:inline;" onsubmit="return confirm('Удалить папку?');">
+                  <?= bitrix_sessid_post() ?>
+                  <input type="hidden" name="act" value="delete">
+                  <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
+                  <button class="ui-btn ui-btn-light" type="submit">Удалить</button>
+                </form>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="ts-card">
+      <div style="font-weight:800;">Файлы</div>
+
+      <div style="margin-top:10px;">
+        <form method="post"
+              enctype="multipart/form-data"
+              action="/local/typical_sites/folders.php?code=<?= urlencode($code) ?>&folder_id=<?= (int)$currentFolder->getId() ?>"
+              class="ts-row ts-upload">
+          <?= bitrix_sessid_post() ?>
+          <input type="hidden" name="act" value="upload">
+          <input type="file" name="upload_file" required>
+          <button class="ui-btn ui-btn-primary" type="submit">Загрузить</button>
+        </form>
+      </div>
+
+      <div class="ts-list">
+        <?php if (empty($files)): ?>
+          <div class="ts-meta">Файлов нет.</div>
+        <?php else: ?>
+          <?php foreach ($files as $f): ?>
+            <?php
+              $fileObj = \Bitrix\Disk\File::loadById((int)$f['ID']);
+              $fileUrl = '';
+              if ($fileObj) {
+                  $fileUrl = (string)$urlManager->getUrlForShowFile($fileObj);
+              }
+            ?>
+            <div class="ts-item">
+              <div class="ts-name" style="min-width:0;">
+                <span class="ui-icon ui-icon-file" style="opacity:.75;"></span>
+                <b><?= h($f['NAME']) ?></b>
+              </div>
+              <div class="ts-actions">
+                <?php if ($fileUrl !== ''): ?>
+                  <a class="ui-btn ui-btn-light" href="<?= h($fileUrl) ?>" target="_blank">Открыть</a>
+                <?php endif; ?>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+    </div>
+  </div>
+
 </div>
+
+<?php
+require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
