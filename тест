@@ -1,1 +1,61 @@
-Bitrix\Disk\Folder::getChildren(): Argument #1 ($securityContext) must be of type Bitrix\Disk\Security\SecurityContext, array given, called in /var/www/html/bx-site/local/typical_sites/lib/SiteService.php on line 1265
+public function ensureSiteDiskFolder(int $siteId, string $siteCode, string $siteName = '', int $userId = 0): int
+{
+    if (!Loader::includeModule('disk')) {
+        throw new \Exception('Модуль disk не установлен');
+    }
+
+    $driver = \Bitrix\Disk\Driver::getInstance();
+
+    // Правильный commonId для "Диск компании" в коробке обычно shared_files_<SITE_ID>
+    $commonId = 'shared_files_' . (defined('SITE_ID') ? SITE_ID : '');
+    $storage = $driver->getStorageByCommonId($commonId);
+
+    // fallback (на всякий)
+    if (!$storage) {
+        $storage = $driver->getStorageByCommonId('shared_files');
+    }
+
+    if (!$storage) {
+        throw new \Exception('Не найден storage Диска компании (пробовали: ' . $commonId . ' и shared_files)');
+    }
+
+    $root = $storage->getRootObject();
+    if (!$root) {
+        throw new \Exception('Не найден root folder Диска компании');
+    }
+
+    $folderName = 'TS_' . $this->normalizeSlug($siteCode);
+
+    // Если уже записан UF_DISK_FOLDER_ID — вернём его
+    $site = $this->getSiteById($siteId);
+    $existingId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
+    if ($existingId > 0) {
+        return $existingId;
+    }
+
+    // --- ВАЖНО: корректный поиск папки по имени через ObjectTable (без getChildren(filter))
+    $row = \Bitrix\Disk\Internals\ObjectTable::getList([
+        'select' => ['ID'],
+        'filter' => [
+            '=PARENT_ID' => (int)$root->getId(),
+            '=NAME'      => $folderName,
+            '=TYPE'      => \Bitrix\Disk\Internals\ObjectTable::TYPE_FOLDER,
+            '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
+        ],
+        'limit' => 1,
+    ])->fetch();
+
+    if ($row) {
+        return (int)$row['ID'];
+    }
+
+    if ($userId <= 0) $userId = $this->getCurrentUserId();
+
+    // Создаём папку (addSubFolder как ты делал)
+    $folder = $root->addSubFolder(['NAME' => $folderName], $userId);
+    if (!$folder) {
+        throw new \Exception('Не удалось создать папку в Диске компании');
+    }
+
+    return (int)$folder->getId();
+}
