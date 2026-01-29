@@ -68,13 +68,21 @@ if ($pageId > 0) {
     }
 }
 
+// HOME slug сайта (для дефолта чекбокса)
+$homeSlug = trim((string)($site['UF_HOME_SLUG'] ?? ''));
+
 if ($request->isPost() && check_bitrix_sessid()) {
     $title = (string)$request->getPost('TITLE');
     $slug  = (string)$request->getPost('SLUG');
     $sort  = (int)$request->getPost('SORT');
-    $active = ($request->getPost('ACTIVE') === 'Y');
+
+    // ACTIVE у тебя через select, поэтому читаем как строку
+    $active = ((string)$request->getPost('ACTIVE') === 'Y');
 
     $content = (string)$request->getPost('CONTENT');
+
+    // новый чекбокс
+    $makeHome = ((string)$request->getPost('MAKE_HOME') === 'Y');
 
     try {
         $slug = mb_strtolower(trim($slug));
@@ -96,6 +104,7 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 'sort' => $sort,
                 'active' => $active,
             ]);
+
         } else {
             $newPageId = $service->addPage($siteId, [
                 'TITLE' => $title,
@@ -111,6 +120,17 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 'sort' => $sort,
                 'active' => $active,
             ]);
+
+            $pageId = (int)$newPageId;
+        }
+
+        // если выбрали "Сделать главной" — ставим UF_HOME_SLUG
+        if ($makeHome) {
+            if (!method_exists($service, 'updateSiteSettings')) {
+                throw new \RuntimeException("В SiteService нет метода updateSiteSettings()");
+            }
+            $service->updateSiteSettings($siteId, ['HOME_SLUG' => $slug]);
+            $service->logAction($siteId, (int)$USER->GetID(), 'SITE_HOME_SET', 'site', $siteId, ['home_slug' => $slug]);
         }
 
         LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
@@ -128,6 +148,16 @@ if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
     $activeValue = 'N';
 }
 $contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
+
+// дефолт чекбокса MAKE_HOME:
+// - если POST был (ошибка) — берём из POST
+// - иначе если редактируем страницу и она сейчас HOME — true
+$makeHomeValue = $_POST['MAKE_HOME'] ?? '';
+if ($makeHomeValue === '') {
+    $makeHomeChecked = ($pageId > 0 && $homeSlug !== '' && (string)$slugValue === $homeSlug);
+} else {
+    $makeHomeChecked = ($makeHomeValue === 'Y');
+}
 
 $APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
 
@@ -163,6 +193,18 @@ $openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page
 }
 .ts-help{margin-top:8px;color: var(--muted);font-size: 12px;}
 .ts-hr{height:1px;background: rgba(231,233,242,.9);margin:14px 0;border:0;}
+
+.ts-checkRow{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  padding:10px 12px;
+  border:1px solid rgba(31,36,48,.10);
+  background: rgba(248,249,255,.65);
+  border-radius: 14px;
+}
+.ts-checkRow input{ transform: scale(1.05); }
+.ts-checkRow b{ font-size:13px; }
 </style>
 
 <div class="ts-page">
@@ -175,6 +217,9 @@ $openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page
           Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b>
           <?php if ($pageId > 0): ?>
             · SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$slugValue) ?></span>
+          <?php endif; ?>
+          <?php if ($homeSlug !== ''): ?>
+            · HOME: <span class="ts-code"><?= htmlspecialcharsbx($homeSlug) ?></span>
           <?php endif; ?>
         </div>
       </div>
@@ -231,7 +276,19 @@ $openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page
           <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
         </select>
       </div>
-      <div></div>
+
+      <div class="ts-field" style="padding-top:22px;">
+        <div class="ts-checkRow">
+          <input type="checkbox" id="MAKE_HOME" name="MAKE_HOME" value="Y" <?= ($makeHomeChecked ? 'checked' : '') ?>>
+          <label for="MAKE_HOME" style="margin:0; cursor:pointer;">
+            <b>Сделать главной</b>
+            <div class="ts-help" style="margin:4px 0 0;">
+              выставит <span class="ts-code">UF_HOME_SLUG</span> = текущему SLUG
+            </div>
+          </label>
+        </div>
+      </div>
+
       <div></div>
     </div>
 
