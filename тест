@@ -2,7 +2,10 @@
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/header.php");
 
 use Bitrix\Main\Context;
+use Bitrix\Main\Loader;
 use Bitrix\Main\UI\Extension;
+
+require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
 
 global $USER, $APPLICATION;
 
@@ -11,15 +14,13 @@ Extension::load([
     "ui.alerts",
     "ui.icons",
     "ui.fonts.opensans",
-    "main.popup",
 ]);
 
 $APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
-require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
-
 $request = Context::getCurrent()->getRequest();
 $code = trim((string)$request->getQuery('code'));
+$pageId = (int)$request->getQuery('page_id');
 
 if ($code === '') {
     ShowError("Не указан code");
@@ -37,7 +38,7 @@ $service = new \Cc10\SiteService();
 $site = $service->getSiteByCode($code);
 
 if (!$site) {
-    ShowError("Сайт не найден");
+    ShowError("Сайт не найден или не активен");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
@@ -45,68 +46,71 @@ if (!$site) {
 $siteId = (int)$site['ID'];
 $role = $service->getUserRole((int)$USER->GetID(), $siteId);
 
+// Разрешаем редактирование: глобальный админ или ADMIN/DEVELOPER сайта
 if (!$USER->IsAdmin() && !in_array($role, ['ADMIN', 'DEVELOPER'], true)) {
-    ShowError("Нет прав на управление страницами");
+    ShowError("Нет прав на редактирование страниц");
     require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
     exit;
 }
 
-$APPLICATION->SetTitle("Страницы: " . (string)$site['UF_NAME']);
-
 $errors = [];
+$page = null;
 
-// POST actions: enable/disable/delete/make_home
+if ($pageId > 0) {
+    $page = $service->getPageById($pageId);
+    if (!$page) {
+        $errors[] = "Страница не найдена";
+        $pageId = 0;
+    } elseif ((int)$page['UF_SITE'] !== $siteId) {
+        $errors[] = "Страница не принадлежит этому сайту";
+        $page = null;
+        $pageId = 0;
+    }
+}
+
 if ($request->isPost() && check_bitrix_sessid()) {
-    $action = (string)$request->getPost('action');
-    $pageId = (int)$request->getPost('page_id');
+    $title = (string)$request->getPost('TITLE');
+    $slug  = (string)$request->getPost('SLUG');
+    $sort  = (int)$request->getPost('SORT');
+    $active = ($request->getPost('ACTIVE') === 'Y');
+
+    $content = (string)$request->getPost('CONTENT');
 
     try {
-        if ($pageId <= 0) {
-            throw new \InvalidArgumentException("Некорректный page_id");
-        }
+        $slug = mb_strtolower(trim($slug));
+        $slug = $service->validateSlug($slug);
+        $service->assertPageSlugUnique($siteId, $slug, $pageId);
 
-        if ($action === 'enable') {
-            $service->setPageActive($pageId, $siteId, true);
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_ENABLE', 'page', $pageId, []);
+        if ($pageId > 0) {
+            $service->updatePage($pageId, $siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
 
-        } elseif ($action === 'disable') {
-            $service->setPageActive($pageId, $siteId, false);
-            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DISABLE', 'page', $pageId, []);
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_UPDATE', 'page', $pageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
+        } else {
+            $newPageId = $service->addPage($siteId, [
+                'TITLE' => $title,
+                'SLUG' => $slug,
+                'SORT' => $sort,
+                'ACTIVE' => $active,
+                'CONTENT' => $content,
+            ]);
 
-        } elseif ($action === 'delete') {
-            if (method_exists($service, 'softDeletePage')) {
-                $service->softDeletePage($pageId, $siteId, (int)$USER->GetID());
-                $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => true]);
-            } else {
-                $service->deletePage($pageId, $siteId);
-                $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => false]);
-            }
-
-        } elseif ($action === 'make_home') {
-            // ставим UF_HOME_SLUG по slug выбранной страницы
-            $pagesAll = $service->getPagesForSite($siteId, false);
-            $found = null;
-            foreach ($pagesAll as $p) {
-                if ((int)$p['ID'] === $pageId) {
-                    $found = $p;
-                    break;
-                }
-            }
-            if (!$found) {
-                throw new \RuntimeException("Страница не найдена");
-            }
-
-            $slug = trim((string)($found['UF_SLUG'] ?? ''));
-            if ($slug === '') {
-                throw new \RuntimeException("У страницы пустой SLUG");
-            }
-
-            if (!method_exists($service, 'updateSiteSettings')) {
-                throw new \RuntimeException("В SiteService нет метода updateSiteSettings()");
-            }
-
-            $service->updateSiteSettings($siteId, ['HOME_SLUG' => $slug]);
-            $service->logAction($siteId, (int)$USER->GetID(), 'SITE_HOME_SET', 'site', $siteId, ['home_slug' => $slug]);
+            $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_CREATE', 'page', $newPageId, [
+                'title' => $title,
+                'slug' => $slug,
+                'sort' => $sort,
+                'active' => $active,
+            ]);
         }
 
         LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
@@ -115,31 +119,50 @@ if ($request->isPost() && check_bitrix_sessid()) {
     }
 }
 
-$pages = $service->getPagesForSite($siteId, false);
+// значения для формы (учитываем POST при ошибке)
+$titleValue = $_POST['TITLE'] ?? ($page['UF_TITLE'] ?? '');
+$slugValue  = $_POST['SLUG'] ?? ($page['UF_SLUG'] ?? 'index');
+$sortValue  = $_POST['SORT'] ?? ($page['UF_SORT'] ?? 100);
+$activeValue = $_POST['ACTIVE'] ?? (($page && !empty($page['UF_ACTIVE'])) ? 'Y' : 'Y');
+if ($page && empty($_POST) && !$page['UF_ACTIVE']) {
+    $activeValue = 'N';
+}
+$contentValue = $_POST['CONTENT'] ?? ($page['UF_CONTENT'] ?? '');
 
-$homeSlug = trim((string)($site['UF_HOME_SLUG'] ?? ''));
+$APPLICATION->SetTitle($pageId > 0 ? "Редактирование страницы" : "Создание страницы");
 
-$totalCnt = count($pages);
-$activeCnt = 0;
-foreach ($pages as $p) if (!empty($p['UF_ACTIVE'])) $activeCnt++;
-$offCnt = $totalCnt - $activeCnt;
+$backUrl = '/local/typical_sites/pages.php?code=' . urlencode($code);
+$openSiteUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
+$openPageUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode((string)$slugValue);
 ?>
 
 <style>
-/* небольшой бейдж HOME */
-.ts-home{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:3px 10px;
-  border-radius:999px;
-  border:1px solid rgba(34,197,94,.30);
-  background: rgba(34,197,94,.08);
-  font-size:12px;
-  font-weight:700;
-  margin-left:8px;
+.ts-formCard{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
 }
-.ts-home .dot{width:8px;height:8px;border-radius:999px;background:var(--ok);}
+.ts-grid2{display:grid;grid-template-columns: 1fr 260px 160px;gap:12px;}
+@media (max-width: 980px){ .ts-grid2{grid-template-columns:1fr;} }
+
+.ts-field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:700;}
+.ts-field input[type="text"], .ts-field input[type="number"], .ts-field select{
+  width:100%;
+  height:38px;
+  border:1px solid rgba(31,36,48,.14);
+  background: rgba(255,255,255,.92);
+  border-radius:12px;
+  padding: 0 12px;
+  outline:none;
+}
+.ts-field input:focus, .ts-field select:focus{
+  border-color: rgba(91,124,255,.45);
+  box-shadow: 0 0 0 4px rgba(91,124,255,.12);
+}
+.ts-help{margin-top:8px;color: var(--muted);font-size: 12px;}
+.ts-hr{height:1px;background: rgba(231,233,242,.9);margin:14px 0;border:0;}
 </style>
 
 <div class="ts-page">
@@ -147,37 +170,24 @@ $offCnt = $totalCnt - $activeCnt;
   <div class="ts-hero">
     <div class="ts-heroTop">
       <div>
-        <h1 class="ts-title">
-          Страницы сайта: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>
-          <?php if ($homeSlug !== ''): ?>
-            <span class="ts-home"><span class="dot"></span> HOME: <?= htmlspecialcharsbx($homeSlug) ?></span>
+        <h1 class="ts-title"><?= ($pageId > 0 ? 'Редактирование' : 'Создание') ?> страницы</h1>
+        <div class="ts-sub">
+          Сайт: <b><?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></b>
+          <?php if ($pageId > 0): ?>
+            · SLUG: <span class="ts-code"><?= htmlspecialcharsbx((string)$slugValue) ?></span>
           <?php endif; ?>
-        </h1>
-        <div class="ts-sub">Поиск, фильтры, сортировка и меню “⋯” для каждой страницы.</div>
+        </div>
       </div>
 
       <div class="ts-actions">
-        <a class="ui-btn ts-ghost" href="/local/typical_sites/admin.php">К сайтам</a>
-        <a class="ui-btn ts-ghost" href="/local/typical_sites/site.php?code=<?= urlencode($code) ?>" target="_blank">Открыть сайт</a>
-        <a class="ui-btn ui-btn-icon-add ts-primary" href="/local/typical_sites/page_edit.php?code=<?= urlencode($code) ?>">Создать страницу</a>
-      </div>
-    </div>
-
-    <div class="ts-grid">
-      <div class="ts-stat">
-        <div class="k">Всего страниц</div>
-        <div class="v"><?= (int)$totalCnt ?></div>
-        <div class="hint">включая выключенные</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Активные</div>
-        <div class="v" style="color:var(--ok);"><?= (int)$activeCnt ?></div>
-        <div class="hint">видны пользователям</div>
-      </div>
-      <div class="ts-stat">
-        <div class="k">Выключенные</div>
-        <div class="v" style="color:var(--warn);"><?= (int)$offCnt ?></div>
-        <div class="hint">скрыты</div>
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Назад к страницам</a>
+        <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openSiteUrl) ?>" target="_blank">Открыть сайт</a>
+        <?php if ($pageId > 0): ?>
+          <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($openPageUrl) ?>" target="_blank">Открыть страницу</a>
+        <?php endif; ?>
+        <button class="ui-btn ts-primary" type="submit" form="ts-page-form">
+          <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
+        </button>
       </div>
     </div>
   </div>
@@ -192,287 +202,78 @@ $offCnt = $totalCnt - $activeCnt;
     </div>
   <?php endif; ?>
 
-  <div class="ts-toolbar">
-    <input class="ts-input" type="text" id="ts-search" placeholder="Поиск по заголовку или SLUG...">
-    <button type="button" class="ts-chip is-active" data-filter="all">
-      <span class="ts-dot all"></span> Все <b><?= (int)$totalCnt ?></b>
-    </button>
-    <button type="button" class="ts-chip" data-filter="active">
-      <span class="ts-dot ok"></span> Active <b><?= (int)$activeCnt ?></b>
-    </button>
-    <button type="button" class="ts-chip" data-filter="off">
-      <span class="ts-dot off"></span> Off <b><?= (int)$offCnt ?></b>
-    </button>
-    <span class="ts-pill" style="margin-left:auto;">
-      Показано: <b id="ts-count"><?= (int)$totalCnt ?></b>
-    </span>
-  </div>
+  <form method="post" id="ts-page-form" class="ts-formCard">
+    <?= bitrix_sessid_post() ?>
 
-  <?php if (empty($pages)): ?>
-    <div class="ui-alert ui-alert-warning">
-      <span class="ui-alert-message">Страниц пока нет.</span>
+    <div class="ts-grid2">
+      <div class="ts-field">
+        <label>Заголовок</label>
+        <input type="text" name="TITLE" value="<?= htmlspecialcharsbx($titleValue) ?>" placeholder="Например: Главная, О компании, Контакты">
+      </div>
+
+      <div class="ts-field">
+        <label>SLUG (часть URL)</label>
+        <input type="text" name="SLUG" value="<?= htmlspecialcharsbx($slugValue) ?>" placeholder="about">
+        <div class="ts-help">латиница/цифры/ - _ (например: about)</div>
+      </div>
+
+      <div class="ts-field">
+        <label>Сортировка</label>
+        <input type="number" name="SORT" value="<?= (int)$sortValue ?>">
+      </div>
     </div>
-  <?php else: ?>
-    <div class="ts-tableWrap">
-      <table class="ts-table" id="ts-table">
-        <thead>
-          <tr>
-            <th style="width:70px;" data-sort="id" class="ts-sort">ID</th>
-            <th data-sort="title" class="ts-sort">Заголовок</th>
-            <th style="width:170px;" data-sort="slug" class="ts-sort">SLUG</th>
-            <th style="width:90px;" data-sort="sort" class="ts-sort">SORT</th>
-            <th style="width:140px;" data-sort="status" class="ts-sort">Статус</th>
-            <th style="width:420px;">Действия</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($pages as $p): ?>
-            <?php
-              $pageId = (int)$p['ID'];
-              $title = (string)$p['UF_TITLE'];
-              $slug = (string)$p['UF_SLUG'];
-              $sort = (int)$p['UF_SORT'];
-              $isActive = !empty($p['UF_ACTIVE']);
 
-              $isHome = ($homeSlug !== '' && $slug === $homeSlug);
-
-              $openUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode($slug);
-              $blocksUrl = '/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . $pageId;
-              $editUrl = '/local/typical_sites/page_edit.php?code=' . urlencode($code) . '&page_id=' . $pageId;
-
-              $searchKey = mb_strtolower(trim($title . ' ' . $slug));
-            ?>
-            <tr class="ts-row"
-                data-search="<?= htmlspecialcharsbx($searchKey) ?>"
-                data-status="<?= ($isActive ? 'active' : 'off') ?>"
-                data-id="<?= $pageId ?>"
-                data-title="<?= htmlspecialcharsbx(mb_strtolower($title)) ?>"
-                data-slug="<?= htmlspecialcharsbx(mb_strtolower($slug)) ?>"
-                data-sort="<?= (int)$sort ?>">
-              <td><?= $pageId ?></td>
-              <td>
-                <?= htmlspecialcharsbx($title) ?>
-                <?php if ($isHome): ?>
-                  <span class="ts-home" title="Главная страница"><span class="dot"></span> HOME</span>
-                <?php endif; ?>
-              </td>
-              <td><span class="ts-code"><?= htmlspecialcharsbx($slug) ?></span></td>
-              <td><?= (int)$sort ?></td>
-              <td>
-                <?php if ($isActive): ?>
-                  <span class="ts-pill ok"><span class="dot"></span> ACTIVE</span>
-                <?php else: ?>
-                  <span class="ts-pill off"><span class="dot"></span> OFF</span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <div class="ts-actionsRow">
-
-                  <button type="button"
-                          class="ui-btn ui-btn-icon-more ts-menu-btn ts-action ts-more"
-                          data-page-id="<?= $pageId ?>"
-                          data-code="<?= htmlspecialcharsbx($code) ?>"
-                          data-slug="<?= htmlspecialcharsbx($slug) ?>"
-                          data-open-url="<?= htmlspecialcharsbx($openUrl) ?>"
-                          data-edit-url="<?= htmlspecialcharsbx($editUrl) ?>"
-                          data-blocks-url="<?= htmlspecialcharsbx($blocksUrl) ?>"
-                          data-is-home="<?= ($isHome ? '1' : '0') ?>">
-                          ...
-                  </button>
-
-                  <?php if (!$isHome): ?>
-                    <form method="post" style="display:inline;">
-                      <?= bitrix_sessid_post() ?>
-                      <input type="hidden" name="page_id" value="<?= $pageId ?>">
-                      <button class="ui-btn ui-btn-success" type="submit" name="action" value="make_home"
-                              title="Сделать эту страницу главной (UF_HOME_SLUG)">
-                        Сделать главной
-                      </button>
-                    </form>
-                  <?php endif; ?>
-
-                  <form method="post" style="display:inline;">
-                    <?= bitrix_sessid_post() ?>
-                    <input type="hidden" name="page_id" value="<?= $pageId ?>">
-                    <?php if ($isActive): ?>
-                      <button class="ui-btn ts-action" type="submit" name="action" value="disable">Выключить</button>
-                    <?php else: ?>
-                      <button class="ui-btn ts-action" type="submit" name="action" value="enable">Включить</button>
-                    <?php endif; ?>
-                  </form>
-
-                  <form method="post" style="display:inline;" onsubmit="return confirm('Удалить страницу?');">
-                    <?= bitrix_sessid_post() ?>
-                    <input type="hidden" name="page_id" value="<?= $pageId ?>">
-                    <button class="ui-btn ts-danger" type="submit" name="action" value="delete">Удалить</button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
+    <div class="ts-grid2" style="grid-template-columns: 220px 1fr 1fr; margin-top:12px;">
+      <div class="ts-field">
+        <label>Активна</label>
+        <select name="ACTIVE">
+          <option value="Y" <?= ($activeValue === 'Y' ? 'selected' : '') ?>>Y</option>
+          <option value="N" <?= ($activeValue === 'N' ? 'selected' : '') ?>>N</option>
+        </select>
+      </div>
+      <div></div>
+      <div></div>
     </div>
-  <?php endif; ?>
+
+    <hr class="ts-hr">
+
+    <div class="ts-field">
+      <label>Контент (HTML)</label>
+      <?php
+      if (Loader::includeModule('fileman') && class_exists('\CFileMan')) {
+          \CFileMan::AddHTMLEditorFrame(
+              "CONTENT",
+              $contentValue,
+              "CONTENT_TYPE",
+              "html",
+              ["height" => 320, "width" => "100%"],
+              "N",
+              0,
+              "",
+              "",
+              false,
+              true,
+              true
+          );
+      } else {
+          ?>
+          <textarea name="CONTENT" style="width:100%; height:320px; border-radius:12px; border:1px solid rgba(31,36,48,.14); padding:10px;"><?= htmlspecialcharsbx($contentValue) ?></textarea>
+          <?php
+      }
+      ?>
+      <div class="ts-help">HTML хранится в UF_CONTENT. Блоки страницы (blocks) рендерятся отдельно.</div>
+    </div>
+
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="ui-btn ts-primary" type="submit">
+        <?= ($pageId > 0 ? 'Сохранить' : 'Создать') ?>
+      </button>
+      <a class="ui-btn ts-ghost" href="<?= htmlspecialcharsbx($backUrl) ?>">Отмена</a>
+    </div>
+
+  </form>
 
 </div>
-
-<script>
-(function(){
-  const input = document.getElementById('ts-search');
-  const rows = Array.from(document.querySelectorAll('tr.ts-row'));
-  const cnt = document.getElementById('ts-count');
-  const chips = Array.from(document.querySelectorAll('.ts-chip'));
-  let statusFilter = 'all';
-
-  function apply(){
-    const q = (input.value || '').toLowerCase().trim();
-    let shown = 0;
-
-    rows.forEach(r => {
-      const key = (r.getAttribute('data-search') || '');
-      const st = (r.getAttribute('data-status') || 'off');
-      const okSearch = (q === '' || key.includes(q));
-      const okStatus = (statusFilter === 'all' || st === statusFilter);
-      const ok = okSearch && okStatus;
-
-      r.style.display = ok ? '' : 'none';
-      if (ok) shown++;
-    });
-
-    if (cnt) cnt.textContent = shown;
-  }
-
-  chips.forEach(ch => {
-    ch.addEventListener('click', () => {
-      chips.forEach(x => x.classList.remove('is-active'));
-      ch.classList.add('is-active');
-      statusFilter = ch.getAttribute('data-filter') || 'all';
-      apply();
-    });
-  });
-
-  if (input) input.addEventListener('input', apply);
-
-  function copyText(text){
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text);
-    }
-    return new Promise((resolve) => {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      resolve();
-    });
-  }
-
-  // context menu (⋯)
-  if (window.BX && BX.ready) {
-    BX.ready(function(){
-      document.querySelectorAll('.ts-menu-btn').forEach(function(btn){
-        btn.addEventListener('click', function(){
-          const openUrl = btn.getAttribute('data-open-url') || '';
-          const editUrl = btn.getAttribute('data-edit-url') || '';
-          const blocksUrl = btn.getAttribute('data-blocks-url') || '';
-          const slug = btn.getAttribute('data-slug') || '';
-          const id = btn.getAttribute('data-page-id') || '0';
-          const isHome = btn.getAttribute('data-is-home') === '1';
-
-          const items = [
-            { text: 'Открыть страницу', onclick: function(){ window.open(openUrl, '_blank'); this.popupWindow.close(); } },
-            { delimiter: true },
-            { text: 'Редактировать', onclick: function(){ window.location.href = editUrl; this.popupWindow.close(); } },
-            { text: 'Блоки', onclick: function(){ window.location.href = blocksUrl; this.popupWindow.close(); } },
-          ];
-
-          if (!isHome) {
-            items.push({ delimiter: true });
-            items.push({
-              text: 'Сделать главной (HOME)',
-              onclick: function(){
-                // submit hidden form
-                const form = document.getElementById('make_home_form_' + id);
-                if (form) form.submit();
-                this.popupWindow.close();
-              }
-            });
-          }
-
-          items.push({ delimiter: true });
-          items.push({ text: 'Скопировать ссылку', onclick: function(){ copyText(openUrl).then(()=>{}); this.popupWindow.close(); } });
-          items.push({ text: 'Скопировать SLUG', onclick: function(){ copyText(slug).then(()=>{}); this.popupWindow.close(); } });
-
-          BX.PopupMenu.show(
-            'ts_page_menu_' + id,
-            btn,
-            items,
-            { autoHide:true, closeByEsc:true, offsetTop:6, angle:true }
-          );
-        });
-      });
-    });
-  }
-
-  // table sort
-  const table = document.getElementById('ts-table');
-  if (table) {
-    let sortDir = 'asc';
-
-    function sortRows(key){
-      sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
-
-      table.querySelectorAll('th.ts-sort').forEach(th => th.classList.remove('is-sort-asc','is-sort-desc'));
-      const activeTh = table.querySelector('th.ts-sort[data-sort="'+ key +'"]');
-      if (activeTh) activeTh.classList.add(sortDir === 'asc' ? 'is-sort-asc' : 'is-sort-desc');
-
-      rows.sort((a,b) => {
-        const dir = (sortDir === 'asc') ? 1 : -1;
-
-        if (key === 'id') return dir * ((+a.dataset.id) - (+b.dataset.id));
-        if (key === 'sort') return dir * ((+a.dataset.sort) - (+b.dataset.sort));
-        if (key === 'status') return dir * ((a.dataset.status || '').localeCompare(b.dataset.status || ''));
-
-        const av = (a.dataset[key] || '');
-        const bv = (b.dataset[key] || '');
-        return dir * av.localeCompare(bv);
-      });
-
-      const tbody = table.querySelector('tbody');
-      rows.forEach(r => tbody.appendChild(r));
-      apply();
-    }
-
-    table.querySelectorAll('th.ts-sort').forEach(th => {
-      th.style.cursor = 'pointer';
-      th.title = 'Нажми для сортировки';
-      th.addEventListener('click', () => sortRows(th.getAttribute('data-sort')));
-    });
-  }
-
-  // добавим скрытые формы для "Сделать главной" из меню
-  rows.forEach(r => {
-    const id = r.getAttribute('data-id');
-    if (!id) return;
-
-    // уже есть кнопка в строке — форма нужна для меню, чтобы submit работал
-    // создадим всегда, harmless
-    const form = document.createElement('form');
-    form.method = 'post';
-    form.id = 'make_home_form_' + id;
-    form.style.display = 'none';
-    form.innerHTML =
-      '<?= bitrix_sessid_post() ?>' +
-      '<input type="hidden" name="page_id" value="'+ id +'">' +
-      '<input type="hidden" name="action" value="make_home">';
-    document.body.appendChild(form);
-  });
-
-  apply();
-})();
-</script>
 
 <?php
 require($_SERVER["DOCUMENT_ROOT"] . "/bitrix/footer.php");
