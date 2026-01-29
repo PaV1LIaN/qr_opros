@@ -1,37 +1,13 @@
-use Bitrix\Main\Loader;
-use Bitrix\Disk\Folder;
+<label class="ui-ctl ui-ctl-textbox ui-ctl-w100">
+  <input class="ui-ctl-element" type="text" name="settings[label]"
+         value="<?= htmlspecialcharsbx((string)($settings['label'] ?? 'Открыть файл')) ?>">
+</label>
 
-public function uploadFileToSiteDiskFolder(int $diskFolderId, array $file, int $userId): int
-{
-    if (!Loader::includeModule('disk')) {
-        throw new \Exception('Модуль disk не установлен');
-    }
-
-    if ($diskFolderId <= 0) {
-        throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
-    }
-
-    // $file — это $_FILES['...'] (name/tmp_name/type/size/error)
-    if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
-        throw new \Exception('Файл не загружен или ошибка загрузки');
-    }
-
-    $folder = Folder::loadById($diskFolderId);
-    if (!$folder) {
-        throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
-    }
-
-    // В коробке у объекта Folder есть uploadFile($fileArray, $data, $rights, $generateUniqueName) :contentReference[oaicite:0]{index=0}
-    $diskFile = $folder->uploadFile(
-        $file,
-        ['NAME' => (string)$file['name']],
-        [],
-        true
-    );
-
-    if (!$diskFile) {
-        throw new \Exception('Не удалось загрузить файл в Disk');
-    }
-
-    return (int)$diskFile->getId();
-}
+<div style="margin-top:10px;">
+  <input type="file" name="upload_file" />
+  <?php if (!empty($settings['diskFileId'])): ?>
+    <div style="margin-top:6px;font-size:12px;opacity:.8">
+      Уже загружен файл (diskFileId: <?= (int)$settings['diskFileId'] ?>)
+    </div>
+  <?php endif; ?>
+</div>
