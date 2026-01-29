@@ -6,6 +6,7 @@ use Bitrix\Main\Loader;
 use Bitrix\Highloadblock\HighloadBlockTable as HL;
 use Bitrix\Main\Type\DateTime;
 use Bitrix\Disk\Driver;
+use Bitrix\Disk\Folder;
 
 class SiteService
 {
@@ -23,9 +24,9 @@ class SiteService
 
         $this->sitesClass  = $this->getEntityClass('Sites');
         $this->accessClass = $this->getEntityClass('SiteUserAccess');
-        $this->pagesClass = $this->getEntityClass('SitePages');
+        $this->pagesClass  = $this->getEntityClass('SitePages');
         $this->blocksClass = $this->getEntityClass('SitePageBlocks');
-        $this->auditClass = $this->getEntityClass('SiteAuditLog');
+        $this->auditClass  = $this->getEntityClass('SiteAuditLog');
     }
 
     /**
@@ -47,6 +48,19 @@ class SiteService
 
         return $dataClass;
     }
+
+    /**
+     * Текущий пользователь (fallback-safe)
+     */
+    public function getCurrentUserId(): int
+    {
+        global $USER;
+        return ($USER && is_object($USER)) ? (int)$USER->GetID() : 0;
+    }
+
+    // -------------------------
+    // Сайты
+    // -------------------------
 
     /**
      * Сайты, доступные пользователю (VIEWER / ADMIN / DEVELOPER)
@@ -85,6 +99,8 @@ class SiteService
                 'UF_FOLDER',
                 'UF_TEMPLATE_CODE',
                 'UF_ACTIVE',
+                'UF_HOME_SLUG',
+                'UF_DISK_FOLDER_ID',
             ],
             'order'  => ['UF_NAME' => 'ASC'],
         ]);
@@ -165,8 +181,28 @@ class SiteService
     }
 
     /**
+     * Универсальное обновление UF_* полей сайта
+     * (чтобы не ломать твой updateSite(), который заточен под NAME/CODE)
+     */
+    public function updateSiteFields(int $siteId, array $fields): void
+    {
+        $sitesClass = $this->sitesClass;
+
+        if ($siteId <= 0) {
+            throw new \InvalidArgumentException('Некорректный ID сайта');
+        }
+        if (empty($fields)) return;
+
+        $res = $sitesClass::update($siteId, $fields);
+        if (!$res->isSuccess()) {
+            throw new \RuntimeException(
+                'Не удалось обновить сайт: ' . implode(', ', $res->getErrorMessages())
+            );
+        }
+    }
+
+    /**
      * Создать сайт. Возвращает ID записи HL Sites.
-     * UF_FOLDER = /local/typical_sites/site.php?code=<code>
      */
     public function createSite(array $data, int $creatorId): int
     {
@@ -176,7 +212,7 @@ class SiteService
         $code = trim((string)($data['CODE'] ?? ''));
 
         $code = mb_strtolower($code);
-        $code = $this->validateSlug($code);
+        $code = $this->validateSiteCode($code);   // ВАЖНО: отдельный валидатор для кода сайта
         $this->assertSiteCodeUnique($code);
 
         if ($name === '') {
@@ -186,16 +222,10 @@ class SiteService
             throw new \InvalidArgumentException('Пустой CODE сайта');
         }
 
-        // URL просмотра без urlrewrite
-        /**
-         * Убрали так-как делаем главной страницей не только index.php
-         * Теперь главная страница лежит в HL Sites UF_HOME_SLUG
-         * $folderUrl = '/local/typical_sites/site.php?code=' . urlencode($code);
-        */
         $res = $sitesClass::add([
             'UF_CODE'          => $code,
             'UF_NAME'          => $name,
-            //'UF_FOLDER'        => $folderUrl,
+            //'UF_FOLDER'        => '/local/typical_sites/site.php?code=' . urlencode($code), // больше не используем
             'UF_TEMPLATE_CODE' => $data['TEMPLATE_CODE'] ?? null,
             'UF_ACTIVE'        => true,
             'UF_CREATED_BY'    => $creatorId,
@@ -208,19 +238,20 @@ class SiteService
             );
         }
 
-        $diskFolderId = $this->ensureSiteDiskFolder($siteId, $code, (string)$name);
+        $siteId = (int)$res->getId(); // <-- У ТЕБЯ ЭТОГО НЕ ХВАТАЛО
 
-        // сохранить в HL Sites
-        $this->updateSite($siteId, [
+        // Создаём/находим папку в Диске компании и сохраняем ID
+        $diskFolderId = $this->ensureSiteDiskFolder($siteId, $code, (string)$name, $creatorId);
+        $this->updateSiteFields($siteId, [
             'UF_DISK_FOLDER_ID' => $diskFolderId,
         ]);
 
-        return (int)$res->getId();
+        return $siteId;
     }
 
     /**
      * Обновить сайт по ID (NAME/CODE).
-     * При смене CODE автоматически обновляем UF_FOLDER.
+     * (Оставил твою логику, UF_* сюда не добавлял — для UF_* есть updateSiteFields)
      */
     public function updateSite(int $id, array $data): void
     {
@@ -245,8 +276,11 @@ class SiteService
             if ($code === '') {
                 throw new \InvalidArgumentException('Пустой CODE сайта');
             }
-            $fields['UF_CODE']   = $code;
-            //$fields['UF_FOLDER'] = '/local/typical_sites/site.php?code=' . urlencode($code);
+            $code = mb_strtolower($code);
+            $code = $this->validateSiteCode($code);
+            $this->assertSiteCodeUnique($code, $id);
+
+            $fields['UF_CODE'] = $code;
         }
 
         if (empty($fields)) {
@@ -332,7 +366,7 @@ class SiteService
         $sitesClass = $this->sitesClass;
 
         $res = $sitesClass::getList([
-            'select' => ['ID', 'UF_NAME', 'UF_CODE', 'UF_FOLDER', 'UF_ACTIVE', 'UF_CREATED_BY', 'UF_CREATED_AT'],
+            'select' => ['ID', 'UF_NAME', 'UF_CODE', 'UF_FOLDER', 'UF_ACTIVE', 'UF_CREATED_BY', 'UF_CREATED_AT', 'UF_DISK_FOLDER_ID', 'UF_HOME_SLUG'],
             'order'  => ['ID' => 'DESC'],
         ]);
 
@@ -392,6 +426,10 @@ class SiteService
         }
     }
 
+    // -------------------------
+    // Pages
+    // -------------------------
+
     public function getPagesForSite(int $siteId, bool $onlyActive = true): array
     {
         $pagesClass = $this->pagesClass;
@@ -436,7 +474,7 @@ class SiteService
     {
         $pagesClass = $this->pagesClass;
 
-        $slug = $this->normalizeSlug($slug);
+        $slug = $this->normalizeSlug($slug); // допускает index
 
         $row = $pagesClass::getList([
             'filter' => [
@@ -456,7 +494,7 @@ class SiteService
     {
         $pagesClass = $this->pagesClass;
 
-        $slug  = $this->normalizeSlug((string)($data['SLUG'] ?? 'index'));
+        $slug  = $this->validatePageSlug((string)($data['SLUG'] ?? 'index')); // ВАЖНО: разрешает index
         $title = trim((string)($data['TITLE'] ?? ''));
         $html  = (string)($data['CONTENT'] ?? '');
         $sort  = (int)($data['SORT'] ?? 100);
@@ -504,7 +542,7 @@ class SiteService
             throw new \RuntimeException('Страница не принадлежит сайту');
         }
 
-        $slug  = $this->normalizeSlug((string)($data['SLUG'] ?? $page['UF_SLUG']));
+        $slug  = $this->validatePageSlug((string)($data['SLUG'] ?? $page['UF_SLUG']));
         $title = trim((string)($data['TITLE'] ?? $page['UF_TITLE']));
         $html  = (string)($data['CONTENT'] ?? $page['UF_CONTENT']);
         $sort  = (int)($data['SORT'] ?? $page['UF_SORT']);
@@ -585,6 +623,10 @@ class SiteService
         ]);
     }
 
+    /**
+     * Твой normalizeSlug (для страниц) — оставил.
+     * Он допускает пустое => index и валидирует формат.
+     */
     protected function normalizeSlug(string $slug): string
     {
         $slug = trim($slug);
@@ -597,6 +639,10 @@ class SiteService
 
         return strtolower($slug);
     }
+
+    // -------------------------
+    // Blocks
+    // -------------------------
 
     public function getBlocksForPage(int $siteId, int $pageId, bool $onlyActive = true): array
     {
@@ -643,7 +689,7 @@ class SiteService
         $blocksClass = $this->blocksClass;
 
         $type = strtoupper(trim((string)($data['TYPE'] ?? 'TEXT')));
-        if (!in_array($type, ['TEXT','IFRAME', 'LINK'], true)) {
+        if (!in_array($type, ['TEXT','IFRAME','LINK','FILE'], true)) {
             throw new \InvalidArgumentException('Неизвестный тип блока');
         }
 
@@ -683,7 +729,7 @@ class SiteService
         }
 
         $type = strtoupper(trim((string)($data['TYPE'] ?? $block['UF_TYPE'])));
-        if (!in_array($type, ['TEXT','IFRAME', 'LINK'], true)) {
+        if (!in_array($type, ['TEXT','IFRAME','LINK','FILE'], true)) {
             throw new \InvalidArgumentException('Неизвестный тип блока');
         }
 
@@ -732,6 +778,10 @@ class SiteService
         return is_array($data) ? $data : [];
     }
 
+    // -------------------------
+    // Настройки сайта
+    // -------------------------
+
     public function updateSiteSettings(int $siteId, array $data): void
     {
         $sitesClass = $this->sitesClass;
@@ -746,6 +796,7 @@ class SiteService
 
         if (array_key_exists('HOME_SLUG', $data)) {
             $home = trim((string)$data['HOME_SLUG']);
+            // HOME_SLUG может быть пустым
             $fields['UF_HOME_SLUG'] = $home;
         }
 
@@ -760,6 +811,10 @@ class SiteService
             throw new \RuntimeException('Не удалось сохранить настройки сайта: ' . implode(', ', $res->getErrorMessages()));
         }
     }
+
+    // -------------------------
+    // Audit
+    // -------------------------
 
     public function logAction(int $siteId, int $userId, string $action, string $entity, int $entityId = 0, array $data = []): void
     {
@@ -881,6 +936,10 @@ class SiteService
         sort($list);
         return $list;
     }
+
+    // -------------------------
+    // Soft delete / restore (оставил твой код)
+    // -------------------------
 
     public function softDeletePage(int $pageId, int $siteId, int $userId): void
     {
@@ -1027,6 +1086,14 @@ class SiteService
         return $rows;
     }
 
+    // -------------------------
+    // Валидаторы
+    // -------------------------
+
+    /**
+     * Старый валидатор (оставил для обратной совместимости).
+     * Он "строгий" и запрещает index — подходит для CODE сайта.
+     */
     public function validateSlug(string $slug): string
     {
         $slug = trim($slug);
@@ -1039,7 +1106,6 @@ class SiteService
             throw new \InvalidArgumentException('SLUG должен быть в нижнем регистре и содержать только a-z, 0-9, "-" или "_"');
         }
 
-        // зарезервированные слова (чтобы не конфликтовать со служебными файлами)
         $reserved = ['admin','manage','site','pages','blocks','settings','access','audit','index','api'];
         if (in_array($slug, $reserved, true)) {
             throw new \InvalidArgumentException('SLUG зарезервирован, выбери другой');
@@ -1048,18 +1114,41 @@ class SiteService
         return $slug;
     }
 
+    public function validateSiteCode(string $code): string
+    {
+        $code = mb_strtolower(trim($code));
+        return $this->validateSlug($code); // для кода сайта - подходит
+    }
+
+    /**
+     * Валидатор slug страницы: index разрешаем
+     */
+    public function validatePageSlug(string $slug): string
+    {
+        $slug = $this->normalizeSlug($slug); // допускает пустое => index и проверяет формат
+
+        $reserved = ['admin','manage','site','pages','blocks','settings','access','audit','api','themes','assets','templates','router'];
+        if (in_array($slug, $reserved, true)) {
+            throw new \InvalidArgumentException('SLUG страницы зарезервирован, выбери другой');
+        }
+
+        return $slug;
+    }
+
+    // -------------------------
+    // URL safety (оставил твой)
+    // -------------------------
+
     public function isSafeUrl(string $url): bool
     {
         $url = trim($url);
         if ($url === '') return false;
 
-        // запрещаем очевидные инъекции
         $lower = mb_strtolower($url);
         if (str_starts_with($lower, 'javascript:') || str_starts_with($lower, 'data:') || str_starts_with($lower, 'vbscript:')) {
             return false;
         }
 
-        // разрешаем только http/https
         $parts = parse_url($url);
         if (!is_array($parts) || empty($parts['scheme'])) return false;
 
@@ -1077,7 +1166,7 @@ class SiteService
         ];
 
         if ($excludePageId > 0) {
-            $filter['!ID'] = $excludePageId; // исключаем текущую страницу при обновлении
+            $filter['!ID'] = $excludePageId;
         }
 
         $row = $pagesClass::getList([
@@ -1116,7 +1205,6 @@ class SiteService
     {
         $pagesClass = $this->pagesClass;
 
-        // проверка, что страница принадлежит сайту
         $row = $pagesClass::getList([
             'filter' => ['=ID' => $pageId, '=UF_SITE' => $siteId],
             'select' => ['ID'],
@@ -1136,13 +1224,16 @@ class SiteService
         }
     }
 
-    public function ensureSiteDiskFolder(int $siteId, string $siteCode, string $siteName = ''): int
+    // -------------------------
+    // Disk
+    // -------------------------
+
+    public function ensureSiteDiskFolder(int $siteId, string $siteCode, string $siteName = '', int $userId = 0): int
     {
         if (!Loader::includeModule('disk')) {
             throw new \Exception('Модуль disk не установлен');
         }
 
-        // Диск компании (Общие документы)
         $storage = Driver::getInstance()->getStorageByCommonId('shared_files');
         if (!$storage) {
             throw new \Exception('Не найден storage shared_files (Диск компании)');
@@ -1153,31 +1244,26 @@ class SiteService
             throw new \Exception('Не найден root folder Диска компании');
         }
 
-        // Название папки: "TS_<code>" (можешь поменять)
         $folderName = 'TS_' . $this->normalizeSlug($siteCode);
 
-        // Если уже создана и записана — просто вернём
-        $site = $this->getSiteById($siteId); // если у тебя есть такой метод; иначе получи сайт как умеешь
+        $site = $this->getSiteById($siteId);
         $existingId = (int)($site['UF_DISK_FOLDER_ID'] ?? 0);
         if ($existingId > 0) {
             return $existingId;
         }
 
-        // Попробуем найти папку по имени (на случай, если создавалась вручную)
         $children = $root->getChildren([
             'filter' => ['=NAME' => $folderName],
             'limit'  => 1,
         ]);
+
         if (!empty($children)) {
-            $folder = $children[0];
-            return (int)$folder->getId();
+            return (int)$children[0]->getId();
         }
 
-        // Создаём
-        $folder = $root->addSubFolder([
-            'NAME' => $folderName,
-        ], $this->getCurrentUserId()); // сделай метод getCurrentUserId() или передай ID пользователя
+        if ($userId <= 0) $userId = $this->getCurrentUserId();
 
+        $folder = $root->addSubFolder(['NAME' => $folderName], $userId);
         if (!$folder) {
             throw new \Exception('Не удалось создать папку в Диске компании');
         }
@@ -1195,7 +1281,6 @@ class SiteService
             throw new \Exception('Не задан UF_DISK_FOLDER_ID у сайта');
         }
 
-        // $file — это $_FILES['...'] (name/tmp_name/type/size/error)
         if (empty($file['tmp_name']) || (int)$file['error'] !== 0) {
             throw new \Exception('Файл не загружен или ошибка загрузки');
         }
@@ -1205,10 +1290,9 @@ class SiteService
             throw new \Exception('Disk-папка не найдена: ' . $diskFolderId);
         }
 
-        // В коробке у объекта Folder есть uploadFile($fileArray, $data, $rights, $generateUniqueName) :contentReference[oaicite:0]{index=0}
         $diskFile = $folder->uploadFile(
             $file,
-            ['NAME' => (string)$file['name']],
+            ['NAME' => (string)($file['name'] ?? 'file')],
             [],
             true
         );
