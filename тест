@@ -1,46 +1,18 @@
-public function createDiskSubFolder(int $parentFolderId, string $name): int
+public function listDiskFolders(int $parentFolderId): array
 {
     if (!Loader::includeModule('disk')) {
-        throw new \Exception('Модуль disk не установлен');
+        return [];
     }
 
-    $name = trim($name);
-    if ($name === '') {
-        throw new \InvalidArgumentException('Название папки не может быть пустым');
-    }
-
-    // простая защита от странных имён
-    $name = preg_replace('~[\/\\\\:*?"<>|]+~', '_', $name);
-    $name = trim($name);
-    if ($name === '') {
-        throw new \InvalidArgumentException('Недопустимое название папки');
-    }
-
-    $parent = \Bitrix\Disk\Folder::loadById($parentFolderId);
-    if (!$parent) {
-        throw new \Exception('Родительская папка Disk не найдена: ' . $parentFolderId);
-    }
-
-    // попробуем найти существующую подпапку с таким именем
-    $row = \Bitrix\Disk\Internals\ObjectTable::getList([
-        'select' => ['ID'],
+    $rows = \Bitrix\Disk\Internals\ObjectTable::getList([
+        'select' => ['ID', 'NAME'],
         'filter' => [
-            '=PARENT_ID' => (int)$parent->getId(),
-            '=NAME'      => $name,
+            '=PARENT_ID' => $parentFolderId,
             '=TYPE'      => \Bitrix\Disk\Internals\ObjectTable::TYPE_FOLDER,
             '=DELETED_TYPE' => \Bitrix\Disk\Internals\ObjectTable::DELETED_TYPE_NONE,
         ],
-        'limit' => 1,
-    ])->fetch();
+        'order' => ['NAME' => 'ASC'],
+    ])->fetchAll();
 
-    if ($row) {
-        return (int)$row['ID'];
-    }
-
-    $folder = $parent->addSubFolder(['NAME' => $name]);
-    if (!$folder) {
-        throw new \Exception('Не удалось создать подпапку в Disk');
-    }
-
-    return (int)$folder->getId();
+    return $rows ?: [];
 }
