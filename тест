@@ -1,66 +1,23 @@
-use Bitrix\Disk\Folder;
-use Bitrix\Disk\Security\SecurityContext;
-use Bitrix\Disk\Driver;
+<div class="ts-actions">
+  <a class="ui-btn ui-btn-light" href="<?= h($openUrl) ?>">Открыть</a>
 
-public function renameDiskFolder(int $siteRootId, int $folderId, string $newName): void
-{
-    if (!Loader::includeModule('disk')) throw new \Exception('Модуль disk не установлен');
+  <!-- Переименовать -->
+  <button class="ui-btn ui-btn-light" type="button"
+          onclick="var n=prompt('Новое имя папки:', '<?= h($f['NAME']) ?>'); if(!n) return; document.getElementById('rn<?= (int)$f['ID'] ?>').value=n; document.getElementById('frm<?= (int)$f['ID'] ?>').submit();">
+    Переименовать
+  </button>
+  <form method="post" id="frm<?= (int)$f['ID'] ?>" style="display:none;">
+    <?= bitrix_sessid_post() ?>
+    <input type="hidden" name="act" value="rename">
+    <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
+    <input type="hidden" name="new_name" id="rn<?= (int)$f['ID'] ?>" value="">
+  </form>
 
-    $newName = trim($newName);
-    if ($newName === '') throw new \Exception('Пустое имя');
-
-    $root = Folder::loadById($siteRootId);
-    $folder = Folder::loadById($folderId);
-    if (!$root || !$folder) throw new \Exception('Папка не найдена');
-
-    // проверка принадлежности корню
-    if (!$this->diskFolderBelongsToRoot($folder, $siteRootId)) {
-        throw new \Exception('Папка не принадлежит сайту');
-    }
-
-    $ok = $folder->rename($newName, $this->getDiskRightsForUser());
-    if (!$ok) throw new \Exception('Не удалось переименовать папку');
-}
-
-public function deleteDiskFolder(int $siteRootId, int $folderId): void
-{
-    if (!Loader::includeModule('disk')) throw new \Exception('Модуль disk не установлен');
-
-    $root = Folder::loadById($siteRootId);
-    $folder = Folder::loadById($folderId);
-    if (!$root || !$folder) throw new \Exception('Папка не найдена');
-
-    if ((int)$folder->getId() === (int)$siteRootId) {
-        throw new \Exception('Нельзя удалить корневую папку сайта');
-    }
-
-    if (!$this->diskFolderBelongsToRoot($folder, $siteRootId)) {
-        throw new \Exception('Папка не принадлежит сайту');
-    }
-
-    $ok = $folder->delete($this->getDiskRightsForUser());
-    if (!$ok) throw new \Exception('Не удалось удалить папку');
-}
-
-// helpers
-protected function diskFolderBelongsToRoot(\Bitrix\Disk\Folder $folder, int $rootId): bool
-{
-    $cursor = $folder;
-    $guard = 0;
-    while ($cursor && $guard < 200) {
-        $guard++;
-        if ((int)$cursor->getId() === $rootId) return true;
-        $cursor = $cursor->getParent();
-    }
-    return false;
-}
-
-protected function getDiskRightsForUser(): array
-{
-    // Bitrix Disk API ждёт массив прав, а не userId.
-    // В большинстве коробок ок передать пустой массив (права возьмёт из контекста),
-    // но надёжнее использовать SecurityContext.
-    $userId = (int)$GLOBALS['USER']->GetID();
-    $ctx = new SecurityContext($userId);
-    return $ctx->getRights();
-}
+  <!-- Удалить -->
+  <form method="post" style="display:inline;" onsubmit="return confirm('Удалить папку?');">
+    <?= bitrix_sessid_post() ?>
+    <input type="hidden" name="act" value="delete">
+    <input type="hidden" name="obj_id" value="<?= (int)$f['ID'] ?>">
+    <button class="ui-btn ui-btn-light" type="submit">Удалить</button>
+  </form>
+</div>
