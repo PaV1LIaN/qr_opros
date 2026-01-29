@@ -14,7 +14,6 @@ Extension::load([
     "main.popup",
 ]);
 
-// Переиспользуем красивый стиль (позже вынесем в общий ui.css)
 $APPLICATION->SetAdditionalCSS("/local/typical_sites/assets/admin.css");
 
 require_once $_SERVER["DOCUMENT_ROOT"] . "/local/typical_sites/lib/SiteService.php";
@@ -56,7 +55,7 @@ $APPLICATION->SetTitle("Страницы: " . (string)$site['UF_NAME']);
 
 $errors = [];
 
-// POST actions: enable/disable/delete
+// POST actions: enable/disable/delete/make_home
 if ($request->isPost() && check_bitrix_sessid()) {
     $action = (string)$request->getPost('action');
     $pageId = (int)$request->getPost('page_id');
@@ -69,11 +68,12 @@ if ($request->isPost() && check_bitrix_sessid()) {
         if ($action === 'enable') {
             $service->setPageActive($pageId, $siteId, true);
             $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_ENABLE', 'page', $pageId, []);
+
         } elseif ($action === 'disable') {
             $service->setPageActive($pageId, $siteId, false);
             $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DISABLE', 'page', $pageId, []);
+
         } elseif ($action === 'delete') {
-            // если есть soft delete — используем его
             if (method_exists($service, 'softDeletePage')) {
                 $service->softDeletePage($pageId, $siteId, (int)$USER->GetID());
                 $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => true]);
@@ -81,6 +81,32 @@ if ($request->isPost() && check_bitrix_sessid()) {
                 $service->deletePage($pageId, $siteId);
                 $service->logAction($siteId, (int)$USER->GetID(), 'PAGE_DELETE', 'page', $pageId, ['soft' => false]);
             }
+
+        } elseif ($action === 'make_home') {
+            // ставим UF_HOME_SLUG по slug выбранной страницы
+            $pagesAll = $service->getPagesForSite($siteId, false);
+            $found = null;
+            foreach ($pagesAll as $p) {
+                if ((int)$p['ID'] === $pageId) {
+                    $found = $p;
+                    break;
+                }
+            }
+            if (!$found) {
+                throw new \RuntimeException("Страница не найдена");
+            }
+
+            $slug = trim((string)($found['UF_SLUG'] ?? ''));
+            if ($slug === '') {
+                throw new \RuntimeException("У страницы пустой SLUG");
+            }
+
+            if (!method_exists($service, 'updateSiteSettings')) {
+                throw new \RuntimeException("В SiteService нет метода updateSiteSettings()");
+            }
+
+            $service->updateSiteSettings($siteId, ['HOME_SLUG' => $slug]);
+            $service->logAction($siteId, (int)$USER->GetID(), 'SITE_HOME_SET', 'site', $siteId, ['home_slug' => $slug]);
         }
 
         LocalRedirect('/local/typical_sites/pages.php?code=' . urlencode($code));
@@ -89,8 +115,9 @@ if ($request->isPost() && check_bitrix_sessid()) {
     }
 }
 
-// страницы (true = include deleted, если твой метод так устроен; иначе просто игнор)
 $pages = $service->getPagesForSite($siteId, false);
+
+$homeSlug = trim((string)($site['UF_HOME_SLUG'] ?? ''));
 
 $totalCnt = count($pages);
 $activeCnt = 0;
@@ -98,12 +125,34 @@ foreach ($pages as $p) if (!empty($p['UF_ACTIVE'])) $activeCnt++;
 $offCnt = $totalCnt - $activeCnt;
 ?>
 
+<style>
+/* небольшой бейдж HOME */
+.ts-home{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:3px 10px;
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.30);
+  background: rgba(34,197,94,.08);
+  font-size:12px;
+  font-weight:700;
+  margin-left:8px;
+}
+.ts-home .dot{width:8px;height:8px;border-radius:999px;background:var(--ok);}
+</style>
+
 <div class="ts-page">
 
   <div class="ts-hero">
     <div class="ts-heroTop">
       <div>
-        <h1 class="ts-title">Страницы сайта: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?></h1>
+        <h1 class="ts-title">
+          Страницы сайта: <?= htmlspecialcharsbx((string)$site['UF_NAME']) ?>
+          <?php if ($homeSlug !== ''): ?>
+            <span class="ts-home"><span class="dot"></span> HOME: <?= htmlspecialcharsbx($homeSlug) ?></span>
+          <?php endif; ?>
+        </h1>
         <div class="ts-sub">Поиск, фильтры, сортировка и меню “⋯” для каждой страницы.</div>
       </div>
 
@@ -172,8 +221,8 @@ $offCnt = $totalCnt - $activeCnt;
             <th data-sort="title" class="ts-sort">Заголовок</th>
             <th style="width:170px;" data-sort="slug" class="ts-sort">SLUG</th>
             <th style="width:90px;" data-sort="sort" class="ts-sort">SORT</th>
-            <th style="width:120px;" data-sort="status" class="ts-sort">Статус</th>
-            <th style="width:380px;">Действия</th>
+            <th style="width:140px;" data-sort="status" class="ts-sort">Статус</th>
+            <th style="width:420px;">Действия</th>
           </tr>
         </thead>
         <tbody>
@@ -184,6 +233,8 @@ $offCnt = $totalCnt - $activeCnt;
               $slug = (string)$p['UF_SLUG'];
               $sort = (int)$p['UF_SORT'];
               $isActive = !empty($p['UF_ACTIVE']);
+
+              $isHome = ($homeSlug !== '' && $slug === $homeSlug);
 
               $openUrl = '/local/typical_sites/site.php?code=' . urlencode($code) . '&page=' . urlencode($slug);
               $blocksUrl = '/local/typical_sites/blocks.php?code=' . urlencode($code) . '&page_id=' . $pageId;
@@ -199,7 +250,12 @@ $offCnt = $totalCnt - $activeCnt;
                 data-slug="<?= htmlspecialcharsbx(mb_strtolower($slug)) ?>"
                 data-sort="<?= (int)$sort ?>">
               <td><?= $pageId ?></td>
-              <td><?= htmlspecialcharsbx($title) ?></td>
+              <td>
+                <?= htmlspecialcharsbx($title) ?>
+                <?php if ($isHome): ?>
+                  <span class="ts-home" title="Главная страница"><span class="dot"></span> HOME</span>
+                <?php endif; ?>
+              </td>
               <td><span class="ts-code"><?= htmlspecialcharsbx($slug) ?></span></td>
               <td><?= (int)$sort ?></td>
               <td>
@@ -211,6 +267,7 @@ $offCnt = $totalCnt - $activeCnt;
               </td>
               <td>
                 <div class="ts-actionsRow">
+
                   <button type="button"
                           class="ui-btn ui-btn-icon-more ts-menu-btn ts-action ts-more"
                           data-page-id="<?= $pageId ?>"
@@ -218,12 +275,21 @@ $offCnt = $totalCnt - $activeCnt;
                           data-slug="<?= htmlspecialcharsbx($slug) ?>"
                           data-open-url="<?= htmlspecialcharsbx($openUrl) ?>"
                           data-edit-url="<?= htmlspecialcharsbx($editUrl) ?>"
-                          data-blocks-url="<?= htmlspecialcharsbx($blocksUrl) ?>">
+                          data-blocks-url="<?= htmlspecialcharsbx($blocksUrl) ?>"
+                          data-is-home="<?= ($isHome ? '1' : '0') ?>">
                           ...
                   </button>
 
-                  
-                  <!-- <a class="ui-btn ts-action" href="<?= htmlspecialcharsbx($blocksUrl) ?>">Блоки</a> -->
+                  <?php if (!$isHome): ?>
+                    <form method="post" style="display:inline;">
+                      <?= bitrix_sessid_post() ?>
+                      <input type="hidden" name="page_id" value="<?= $pageId ?>">
+                      <button class="ui-btn ui-btn-success" type="submit" name="action" value="make_home"
+                              title="Сделать эту страницу главной (UF_HOME_SLUG)">
+                        Сделать главной
+                      </button>
+                    </form>
+                  <?php endif; ?>
 
                   <form method="post" style="display:inline;">
                     <?= bitrix_sessid_post() ?>
@@ -288,7 +354,6 @@ $offCnt = $totalCnt - $activeCnt;
 
   if (input) input.addEventListener('input', apply);
 
-  // context menu (⋯)
   function copyText(text){
     if (navigator.clipboard && navigator.clipboard.writeText) {
       return navigator.clipboard.writeText(text);
@@ -304,6 +369,7 @@ $offCnt = $totalCnt - $activeCnt;
     });
   }
 
+  // context menu (⋯)
   if (window.BX && BX.ready) {
     BX.ready(function(){
       document.querySelectorAll('.ts-menu-btn').forEach(function(btn){
@@ -313,16 +379,31 @@ $offCnt = $totalCnt - $activeCnt;
           const blocksUrl = btn.getAttribute('data-blocks-url') || '';
           const slug = btn.getAttribute('data-slug') || '';
           const id = btn.getAttribute('data-page-id') || '0';
+          const isHome = btn.getAttribute('data-is-home') === '1';
 
           const items = [
             { text: 'Открыть страницу', onclick: function(){ window.open(openUrl, '_blank'); this.popupWindow.close(); } },
             { delimiter: true },
             { text: 'Редактировать', onclick: function(){ window.location.href = editUrl; this.popupWindow.close(); } },
             { text: 'Блоки', onclick: function(){ window.location.href = blocksUrl; this.popupWindow.close(); } },
-            { delimiter: true },
-            { text: 'Скопировать ссылку', onclick: function(){ copyText(openUrl).then(()=>{}); this.popupWindow.close(); } },
-            { text: 'Скопировать SLUG', onclick: function(){ copyText(slug).then(()=>{}); this.popupWindow.close(); } },
           ];
+
+          if (!isHome) {
+            items.push({ delimiter: true });
+            items.push({
+              text: 'Сделать главной (HOME)',
+              onclick: function(){
+                // submit hidden form
+                const form = document.getElementById('make_home_form_' + id);
+                if (form) form.submit();
+                this.popupWindow.close();
+              }
+            });
+          }
+
+          items.push({ delimiter: true });
+          items.push({ text: 'Скопировать ссылку', onclick: function(){ copyText(openUrl).then(()=>{}); this.popupWindow.close(); } });
+          items.push({ text: 'Скопировать SLUG', onclick: function(){ copyText(slug).then(()=>{}); this.popupWindow.close(); } });
 
           BX.PopupMenu.show(
             'ts_page_menu_' + id,
@@ -335,7 +416,7 @@ $offCnt = $totalCnt - $activeCnt;
     });
   }
 
-  // table sort with arrows (from admin.css)
+  // table sort
   const table = document.getElementById('ts-table');
   if (table) {
     let sortDir = 'asc';
@@ -371,6 +452,25 @@ $offCnt = $totalCnt - $activeCnt;
     });
   }
 
+  // добавим скрытые формы для "Сделать главной" из меню
+  rows.forEach(r => {
+    const id = r.getAttribute('data-id');
+    if (!id) return;
+
+    // уже есть кнопка в строке — форма нужна для меню, чтобы submit работал
+    // создадим всегда, harmless
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.id = 'make_home_form_' + id;
+    form.style.display = 'none';
+    form.innerHTML =
+      '<?= bitrix_sessid_post() ?>' +
+      '<input type="hidden" name="page_id" value="'+ id +'">' +
+      '<input type="hidden" name="action" value="make_home">';
+    document.body.appendChild(form);
+  });
+
+  apply();
 })();
 </script>
 
