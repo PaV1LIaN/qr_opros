@@ -1,60 +1,120 @@
 <?php
-require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
-$APPLICATION->SetTitle("Панель лаборатории");
-
+require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');
+require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_groups.php';
 require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_acl.php';
 
+lab_require_any_role(['admin','manager']);
+
+$APPLICATION->SetTitle("Добавить блок");
+
+use Bitrix\Main\Loader;
+
 global $USER;
-lab_require_any_role(['admin','manager','assistant']);
 
-$uid = (int)$USER->GetID();
+Loader::includeModule('iblock');
 
-$isAdmin   = lab_is_admin($uid);
-$isManager = lab_is_manager($uid);
+$iblockId = 35;
+$errors = [];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
+    $name        = trim((string)($_POST['NAME'] ?? ''));
+    $description = trim((string)($_POST['DESCRIPTION'] ?? ''));
+
+    if ($name === '') {
+        $errors[] = "Введите название блока.";
+    }
+
+    if (empty($errors)) {
+        $bs = new CIBlockSection;
+
+        $code = CUtil::translit($name, "ru", [
+            "replace_space" => "-",
+            "replace_other" => "-",
+            "change_case"   => "L",
+            "delete_repeat_replace" => true,
+        ]);
+
+        $arFields = [
+            "ACTIVE"            => "Y",
+            "IBLOCK_ID"         => $iblockId,
+            "IBLOCK_SECTION_ID" => false,   // верхний уровень
+            "NAME"              => $name,
+            "CODE"              => $code,
+            "SORT"              => 500,
+            "DESCRIPTION"       => $description,
+            "DESCRIPTION_TYPE"  => "text",
+        ];
+
+        $newId = (int)$bs->Add($arFields);
+
+        if ($newId > 0) {
+
+            // Группа менеджеров конкретного предприятия
+            $groupName = "Менеджер " . $name;
+
+            // STRING_ID стабильный и уникальный
+            $stringId = "lab_mgr_ent_" . (int)$newId;
+
+            try {
+                $managerGroupId = lab_group_create_if_not_exists(
+                    $groupName,
+                    $stringId,
+                    "Менеджеры предприятия: " . $name
+                );
+
+                // Записываем ID группы в UF раздела предприятия (нужно UF_MANAGER_GROUP_ID)
+                $bs->Update((int)$newId, [
+                    "UF_MANAGER_GROUP_ID" => (int)$managerGroupId,
+                ]);
+
+            } catch (Throwable $e) {
+                // Можно удалить раздел, если не хотим "полу-созданного"
+                // CIBlockSection::Delete((int)$newId);
+                $errors[] = "Предприятие создано, но не удалось создать группу менеджеров: " . $e->getMessage();
+            }
+
+            if (empty($errors)) {
+                LocalRedirect("/local/glab/index.php?block_added=Y");
+            }
+
+        } else {
+            $errors[] = "Ошибка при добавлении: " . $bs->LAST_ERROR;
+        }
+    }
+}
 ?>
-<div class="lab-admin-wrap">
-  <h2 style="margin:0 0 12px;">Панель управления</h2>
 
-  <div class="lab-admin-card">
-    <ul class="lab-admin-links">
+<div class="form-container">
+    <h2>Добавить блок (раздел верхнего уровня)</h2>
 
-      <?php if ($isAdmin): ?>
-        <li><a href="/local/glab/add_block.php">Добавить блок</a></li>
-        <li><a href="/local/glab/admin/assign_manager.php">Назначить менеджеров предприятию</a></li>
-      <?php endif; ?>
+    <?php if (!empty($errors)): ?>
+        <div class="errors">
+            <?php foreach ($errors as $e): ?>
+                <p style="color:red;"><?= htmlspecialcharsbx($e) ?></p>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
 
-      <?php if ($isManager): ?>
-        <li><a href="/local/glab/add_subdivision.php">Добавить подразделение</a></li>
-        <li><a href="/local/glab/admin/assign_assistant.php">Назначить лаборантов лабораториям</a></li>
-      <?php endif; ?>
+    <form method="post">
+        <?= bitrix_sessid_post() ?>
 
-      <?php if (!$isAdmin && !$isManager): ?>
-        <li style="list-style: none; padding-left:0; color:#666;">
-          Нет доступных действий по вашей роли.
-        </li>
-      <?php endif; ?>
+        <div class="field">
+            <label>Название блока</label><br>
+            <input type="text" name="NAME"
+                   value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>"
+                   style="width:100%;">
+        </div>
 
-    </ul>
-  </div>
+        <div class="field">
+            <label>Описание</label><br>
+            <textarea name="DESCRIPTION" style="width:100%; height:120px;"><?= htmlspecialcharsbx($_POST['DESCRIPTION'] ?? '') ?></textarea>
+        </div>
+
+        <div class="field">
+            <button type="submit">Добавить</button>
+            <a href="/local/glab/index.php">Отмена</a>
+        </div>
+    </form>
 </div>
 
-<style>
-.lab-admin-wrap{
-  max-width:1050px;
-  margin:0 auto;
-  padding:12px 10px 30px;
-}
-.lab-admin-card{
-  background:#fff;
-  border:1px solid #e6e6e6;
-  border-radius:12px;
-  padding:14px;
-}
-.lab-admin-links{
-  margin:0;
-  padding-left:18px;
-}
-.lab-admin-links li{ margin:8px 0; }
-</style>
-
-<?php require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'; ?>
+<?php require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'); ?>
