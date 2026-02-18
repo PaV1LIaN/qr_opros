@@ -1,2 +1,1 @@
-При переименовки папки ошибка Cannot instantiate abstract class Bitrix\Disk\Security\SecurityContext
-При попытке загрузить файл в folders.php В SiteService нет метода uploadFileToDiskFolderSafe()
+There was an error committing your changes: File could not be edited
