@@ -1,1 +1,47 @@
-There was an error committing your changes: File could not be edited
+<?php
+require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
+$APPLICATION->SetTitle("Панель лаборатории");
+
+require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_acl.php';
+
+global $USER;
+lab_require_any_role(['admin','manager','assistant']);
+
+$uid = (int)$USER->GetID();
+?>
+<div class="lab-admin-wrap">
+  <h2 style="margin:0 0 12px;">Панель управления</h2>
+
+  <div class="lab-admin-card">
+    <ul class="lab-admin-links">
+      <?php if (lab_is_admin($uid)): ?>
+        <li><a href="/local/glab/admin/assign_manager.php">Назначить менеджеров предприятию</a></li>
+      <?php endif; ?>
+
+      <?php if (lab_is_manager($uid)): ?>
+        <li><a href="/local/glab/admin/assign_assistant.php">Назначить лаборантов лабораториям</a></li>
+      <?php endif; ?>
+    </ul>
+  </div>
+</div>
+
+<style>
+.lab-admin-wrap{
+  max-width:1050px;
+  margin:0 auto;
+  padding:12px 10px 30px;
+}
+.lab-admin-card{
+  background:#fff;
+  border:1px solid #e6e6e6;
+  border-radius:12px;
+  padding:14px;
+}
+.lab-admin-links{
+  margin:0;
+  padding-left:18px;
+}
+.lab-admin-links li{ margin:8px 0; }
+</style>
+
+<?php require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'; ?>
