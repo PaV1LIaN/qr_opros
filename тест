@@ -3,7 +3,8 @@ require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php');
 require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_groups.php';
 require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_acl.php';
 
-lab_require_any_role(['admin','manager']);
+// add_block только для администратора
+lab_require_any_role(['admin']);
 
 $APPLICATION->SetTitle("Добавить блок");
 
@@ -68,8 +69,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
                 ]);
 
             } catch (Throwable $e) {
-                // Можно удалить раздел, если не хотим "полу-созданного"
-                // CIBlockSection::Delete((int)$newId);
                 $errors[] = "Предприятие создано, но не удалось создать группу менеджеров: " . $e->getMessage();
             }
 
@@ -84,37 +83,133 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_bitrix_sessid()) {
 }
 ?>
 
-<div class="form-container">
-    <h2>Добавить блок (раздел верхнего уровня)</h2>
+<div class="lab-page-wrap">
+    <h2 class="lab-page-title">Добавить блок (раздел верхнего уровня)</h2>
 
     <?php if (!empty($errors)): ?>
-        <div class="errors">
+        <div class="lab-alert lab-alert--error">
             <?php foreach ($errors as $e): ?>
-                <p style="color:red;"><?= htmlspecialcharsbx($e) ?></p>
+                <div><?= htmlspecialcharsbx($e) ?></div>
             <?php endforeach; ?>
         </div>
     <?php endif; ?>
 
-    <form method="post">
-        <?= bitrix_sessid_post() ?>
+    <div class="lab-card">
+        <form method="post" class="lab-form">
+            <?= bitrix_sessid_post() ?>
 
-        <div class="field">
-            <label>Название блока</label><br>
-            <input type="text" name="NAME"
-                   value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>"
-                   style="width:100%;">
-        </div>
+            <div class="lab-field">
+                <label class="lab-label">Название блока</label>
+                <input class="lab-input" type="text" name="NAME"
+                       value="<?= htmlspecialcharsbx($_POST['NAME'] ?? '') ?>">
+            </div>
 
-        <div class="field">
-            <label>Описание</label><br>
-            <textarea name="DESCRIPTION" style="width:100%; height:120px;"><?= htmlspecialcharsbx($_POST['DESCRIPTION'] ?? '') ?></textarea>
-        </div>
+            <div class="lab-field">
+                <label class="lab-label">Описание</label>
+                <textarea class="lab-textarea" name="DESCRIPTION"><?= htmlspecialcharsbx($_POST['DESCRIPTION'] ?? '') ?></textarea>
+            </div>
 
-        <div class="field">
-            <button type="submit">Добавить</button>
-            <a href="/local/glab/index.php">Отмена</a>
-        </div>
-    </form>
+            <div class="lab-actions">
+                <button class="lab-btn" type="submit">Добавить</button>
+                <a class="lab-btn lab-btn--ghost" href="/local/glab/index.php">Отмена</a>
+            </div>
+        </form>
+    </div>
 </div>
+
+<style>
+/* Контейнер строго 1152px */
+.lab-page-wrap{
+    width:1152px;
+    max-width:1152px;
+    margin:0 auto;
+    padding:12px 10px 30px;
+}
+
+.lab-page-title{
+    margin:0 0 12px;
+}
+
+/* Карточка */
+.lab-card{
+    background:#fff;
+    border:1px solid #e6e6e6;
+    border-radius:12px;
+    padding:16px;
+}
+
+/* Форма */
+.lab-form{ margin:0; }
+.lab-field{ margin:0 0 14px; }
+
+.lab-label{
+    display:block;
+    margin:0 0 6px;
+    font-weight:600;
+}
+
+.lab-input,
+.lab-textarea{
+    width:100%;
+    box-sizing:border-box;
+    padding:10px 12px;
+    border:1px solid #d9d9d9;
+    border-radius:10px;
+    outline:none;
+}
+
+.lab-textarea{
+    min-height:120px;
+    resize:vertical;
+}
+
+.lab-input:focus,
+.lab-textarea:focus{
+    border-color:#9bbcff;
+    box-shadow:0 0 0 3px rgba(46, 124, 255, .12);
+}
+
+/* Кнопки */
+.lab-actions{
+    margin-top:10px;
+    display:flex;
+    gap:10px;
+    align-items:center;
+}
+
+.lab-btn{
+    display:inline-block;
+    border:1px solid #2e7cff;
+    background:#2e7cff;
+    color:#fff;
+    padding:10px 14px;
+    border-radius:10px;
+    cursor:pointer;
+    text-decoration:none;
+    line-height:1.2;
+}
+
+.lab-btn:hover{ opacity:.92; }
+
+.lab-btn--ghost{
+    background:#fff;
+    color:#2e7cff;
+}
+
+/* Ошибки */
+.lab-alert{
+    border-radius:12px;
+    padding:12px 14px;
+    margin:0 0 12px;
+    border:1px solid #e6e6e6;
+    background:#f7f7f7;
+}
+
+.lab-alert--error{
+    border-color:#f2b8b5;
+    background:#fff5f5;
+    color:#8a1f17;
+}
+</style>
 
 <?php require_once($_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'); ?>
