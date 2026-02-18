@@ -1,77 +1,60 @@
 <?php
-// /local/php_interface/lib/lab_acl.php
-// Только функции, без prolog/header.
+require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/header.php';
+$APPLICATION->SetTitle("Панель лаборатории");
 
-if (!function_exists('lab_get_group_id_by_string_id')) {
+require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/lib/lab_acl.php';
 
-    function lab_get_group_id_by_string_id(string $stringId): int
-    {
-        $rs = CGroup::GetList($by = "id", $order = "asc", ["STRING_ID" => $stringId]);
-        $g = $rs->Fetch();
-        return $g ? (int)$g["ID"] : 0;
-    }
+global $USER;
+lab_require_any_role(['admin','manager','assistant']);
 
-    function lab_user_in_group_string_id(int $userId, string $groupStringId): bool
-    {
-        if ($userId <= 0) return false;
+$uid = (int)$USER->GetID();
 
-        $gid = lab_get_group_id_by_string_id($groupStringId);
-        if ($gid <= 0) return false;
+$isAdmin   = lab_is_admin($uid);
+$isManager = lab_is_manager($uid);
+?>
+<div class="lab-admin-wrap">
+  <h2 style="margin:0 0 12px;">Панель управления</h2>
 
-        // КЛЮЧЕВОЕ: приводим все ID групп к int, чтобы strict сравнение работало
-        $groups = array_map('intval', CUser::GetUserGroup($userId));
+  <div class="lab-admin-card">
+    <ul class="lab-admin-links">
 
-        return in_array((int)$gid, $groups, true);
-    }
+      <?php if ($isAdmin): ?>
+        <li><a href="/local/glab/add_block.php">Добавить блок</a></li>
+        <li><a href="/local/glab/admin/assign_manager.php">Назначить менеджеров предприятию</a></li>
+      <?php endif; ?>
 
-    function lab_is_admin(int $userId): bool
-    {
-        return lab_user_in_group_string_id($userId, 'lab_admin');
-    }
+      <?php if ($isManager): ?>
+        <li><a href="/local/glab/add_subdivision.php">Добавить подразделение</a></li>
+        <li><a href="/local/glab/admin/assign_assistant.php">Назначить лаборантов лабораториям</a></li>
+      <?php endif; ?>
 
-    function lab_is_manager(int $userId): bool
-    {
-        return lab_user_in_group_string_id($userId, 'lab_manager');
-    }
+      <?php if (!$isAdmin && !$isManager): ?>
+        <li style="list-style: none; padding-left:0; color:#666;">
+          Нет доступных действий по вашей роли.
+        </li>
+      <?php endif; ?>
 
-    function lab_is_assistant(int $userId): bool
-    {
-        return lab_user_in_group_string_id($userId, 'lab_assistant');
-    }
+    </ul>
+  </div>
+</div>
 
-    function lab_require_auth(): void
-    {
-        global $USER;
-        if (!$USER || !$USER->IsAuthorized()) {
-            LocalRedirect('/auth/');
-            die();
-        }
-    }
-
-    function lab_require_any_role(array $roles): void
-    {
-        global $USER;
-
-        lab_require_auth();
-        $uid = (int)$USER->GetID();
-
-        foreach ($roles as $r) {
-            if ($r === 'admin' && lab_is_admin($uid)) return;
-            if ($r === 'manager' && lab_is_manager($uid)) return;
-            if ($r === 'assistant' && lab_is_assistant($uid)) return;
-        }
-
-        ShowError("Доступ запрещён");
-        die();
-    }
-
-    function lab_has_any_role(int $userId, array $roles): bool
-    {
-        foreach ($roles as $r) {
-            if ($r === 'admin' && lab_is_admin($userId)) return true;
-            if ($r === 'manager' && lab_is_manager($userId)) return true;
-            if ($r === 'assistant' && lab_is_assistant($userId)) return true;
-        }
-        return false;
-    }
+<style>
+.lab-admin-wrap{
+  max-width:1050px;
+  margin:0 auto;
+  padding:12px 10px 30px;
 }
+.lab-admin-card{
+  background:#fff;
+  border:1px solid #e6e6e6;
+  border-radius:12px;
+  padding:14px;
+}
+.lab-admin-links{
+  margin:0;
+  padding-left:18px;
+}
+.lab-admin-links li{ margin:8px 0; }
+</style>
+
+<?php require_once $_SERVER['DOCUMENT_ROOT'].'/bitrix/footer.php'; ?>
