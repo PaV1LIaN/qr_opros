@@ -1,9 +1,34 @@
-<td style="padding:8px;border-bottom:1px solid #eee; white-space:nowrap;">
-  <a class="ui-btn ui-btn-light ui-btn-xs"
-     href="/local/sitebuilder/view.php?siteId=${p.siteId}&pageId=${p.id}"
-     target="_blank">Открыть</a>
+function sb_read_blocks(): array {
+    $path = sb_data_path('blocks.json');
+    if (!file_exists($path)) {
+        return [];
+    }
+    $raw = file_get_contents($path);
+    $data = json_decode((string)$raw, true);
+    return is_array($data) ? $data : [];
+}
 
-  <button class="ui-btn ui-btn-danger ui-btn-xs"
-          data-delete-page-id="${p.id}"
-          data-delete-page-site-id="${p.siteId}">Удалить</button>
-</td>
+function sb_write_blocks(array $blocks): void {
+    $dir = dirname(sb_data_path('blocks.json'));
+    if (!is_dir($dir)) {
+        mkdir($dir, 0775, true);
+    }
+
+    $path = sb_data_path('blocks.json');
+    $fp = fopen($path, 'c+');
+    if (!$fp) {
+        throw new \RuntimeException('Cannot open blocks.json');
+    }
+
+    if (!flock($fp, LOCK_EX)) {
+        fclose($fp);
+        throw new \RuntimeException('Cannot lock blocks.json');
+    }
+
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode(array_values($blocks), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+}
