@@ -1,40 +1,9 @@
-function openPagesDialog(siteId, siteName) {
-  const html = `
-    <div>
-      <div style="margin-bottom:10px;">
-        <button class="ui-btn ui-btn-primary ui-btn-xs" id="btnCreatePage">Создать страницу</button>
-      </div>
-      <div id="pagesBox"></div>
-    </div>
-  `;
+<td style="padding:8px;border-bottom:1px solid #eee; white-space:nowrap;">
+  <a class="ui-btn ui-btn-light ui-btn-xs"
+     href="/local/sitebuilder/view.php?siteId=${p.siteId}&pageId=${p.id}"
+     target="_blank">Открыть</a>
 
-  const mb = BX.UI.Dialogs.MessageBox.show({
-    title: 'Страницы сайта: ' + BX.util.htmlspecialchars(siteName),
-    message: html,
-    buttons: BX.UI.Dialogs.MessageBoxButtons.CLOSE
-  });
-
-  // ВАЖНО: контент модалки появляется не мгновенно.
-  // Поэтому вешаем обработчики после вставки в DOM.
-  setTimeout(function () {
-    const container = document.getElementById('pagesBox');
-    if (!container) {
-      BX.UI.Notification.Center.notify({ content: 'pagesBox не найден (модалка не вставилась)' });
-      return;
-    }
-
-    loadPages(siteId, container);
-
-    const btn = document.getElementById('btnCreatePage');
-    if (!btn) {
-      BX.UI.Notification.Center.notify({ content: 'btnCreatePage не найден' });
-      return;
-    }
-
-    btn.addEventListener('click', function () {
-      openCreatePageDialog(siteId, container);
-    });
-  }, 0);
-
-  return mb;
-}
+  <button class="ui-btn ui-btn-danger ui-btn-xs"
+          data-delete-page-id="${p.id}"
+          data-delete-page-site-id="${p.siteId}">Удалить</button>
+</td>
