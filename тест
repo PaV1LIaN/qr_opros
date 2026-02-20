@@ -1,20 +1,246 @@
-<button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="up">↑</button>
-<button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="down">↓</button>
-<button class="ui-btn ui-btn-light ui-btn-xs" data-edit-block-id="${b.id}">Редактировать</button>
-<button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${b.id}">Удалить</button>
+<?php
+define('NO_KEEP_STATISTIC', true);
+define('NO_AGENT_STATISTIC', true);
+define('DisableEventsCheck', true);
 
-const mvBtn = e.target.closest('[data-move-block-id]');
-if (mvBtn) {
-  const id = parseInt(mvBtn.getAttribute('data-move-block-id'), 10);
-  const dir = mvBtn.getAttribute('data-move-dir');
+require $_SERVER['DOCUMENT_ROOT'].'/bitrix/modules/main/include/prolog_before.php';
 
-  api('block.move', { id, dir }).then(r => {
-    if (!r || r.ok !== true) {
-      BX.UI.Notification.Center.notify({ content: 'Не удалось переместить блок' });
+global $USER, $APPLICATION;
+
+if (!$USER->IsAuthorized()) {
+    LocalRedirect('/auth/');
+}
+
+header('Content-Type: text/html; charset=UTF-8');
+
+\Bitrix\Main\UI\Extension::load([
+    'main.core',
+    'ui.buttons',
+    'ui.dialogs.messagebox',
+    'ui.notification',
+]);
+
+$siteId = (int)($_GET['siteId'] ?? 0);
+$pageId = (int)($_GET['pageId'] ?? 0);
+?>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Редактор блоков</title>
+  <?php $APPLICATION->ShowHead(); ?>
+  <style>
+    body { font-family: Arial, sans-serif; margin:0; background:#f6f7f8; }
+    .top { background:#fff; border-bottom:1px solid #e5e7ea; padding:12px 16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .content { padding: 18px; }
+    .card { background:#fff; border:1px solid #e5e7ea; border-radius:12px; padding:16px; }
+    .muted { color:#6a737f; }
+    .block { border:1px solid #eee; border-radius:10px; padding:12px; margin-top:10px; }
+    .row { display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    pre { white-space:pre-wrap; margin:10px 0 0; background:#f9fafb; border:1px solid #eee; border-radius:8px; padding:10px; }
+    a { color:#0b57d0; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .btns { display:flex; gap:6px; flex-wrap:wrap; }
+    code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <a href="/local/sitebuilder/index.php">← Назад</a>
+    <div class="muted">Редактор блоков</div>
+    <div class="muted">|</div>
+    <div><b>siteId:</b> <code><?= (int)$siteId ?></code></div>
+    <div><b>pageId:</b> <code><?= (int)$pageId ?></code></div>
+
+    <div style="flex:1;"></div>
+
+    <a class="ui-btn ui-btn-light" target="_blank"
+       href="/local/sitebuilder/view.php?siteId=<?= (int)$siteId ?>&pageId=<?= (int)$pageId ?>">Открыть просмотр</a>
+  </div>
+
+  <div class="content">
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="muted">Пока есть только блок <b>Text</b>. Дальше добавим картинки/галереи/кнопки.</div>
+        </div>
+        <div class="btns">
+          <button class="ui-btn ui-btn-primary" id="btnAddText">+ Text блок</button>
+        </div>
+      </div>
+
+      <div id="blocksBox" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+<script>
+BX.ready(function () {
+  const pageId = <?= (int)$pageId ?>;
+  const blocksBox = document.getElementById('blocksBox');
+  const btnAddText = document.getElementById('btnAddText');
+
+  function api(action, data) {
+    return new Promise((resolve, reject) => {
+      BX.ajax({
+        url: '/local/sitebuilder/api.php',
+        method: 'POST',
+        dataType: 'json',
+        data: Object.assign({ action, sessid: BX.bitrix_sessid() }, data || {}),
+        onsuccess: resolve,
+        onfailure: reject
+      });
+    });
+  }
+
+  function renderBlocks(blocks) {
+    if (!blocks || !blocks.length) {
+      blocksBox.innerHTML = '<div class="muted">Блоков нет. Добавь первый.</div>';
       return;
     }
-    loadBlocks();
-  }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.move' }));
 
-  return;
-}
+    blocksBox.innerHTML = blocks.map(b => {
+      const text = (b.content && typeof b.content.text === 'string') ? b.content.text : '';
+      return `
+        <div class="block">
+          <div class="row">
+            <div>
+              <b>#${b.id}</b>
+              <span class="muted">(${BX.util.htmlspecialchars(b.type)} | sort ${b.sort})</span>
+            </div>
+            <div class="btns">
+              <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="up">↑</button>
+              <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="down">↓</button>
+              <button class="ui-btn ui-btn-light ui-btn-xs" data-edit-block-id="${b.id}">Редактировать</button>
+              <button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${b.id}">Удалить</button>
+            </div>
+          </div>
+          <pre>${BX.util.htmlspecialchars(text)}</pre>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function loadBlocks() {
+    api('block.list', { pageId }).then(res => {
+      if (!res || res.ok !== true) {
+        BX.UI.Notification.Center.notify({ content: 'Не удалось загрузить блоки' });
+        return;
+      }
+      renderBlocks(res.blocks);
+    }).catch(() => {
+      BX.UI.Notification.Center.notify({ content: 'Ошибка запроса block.list' });
+    });
+  }
+
+  function addTextBlock() {
+    BX.UI.Dialogs.MessageBox.show({
+      title: 'Новый Text блок',
+      message: '<textarea id="new_text" style="width:100%;height:120px;padding:8px;border:1px solid #d0d7de;border-radius:8px;"></textarea>',
+      buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
+      onOk: function (mb) {
+        const text = document.getElementById('new_text')?.value ?? '';
+        api('block.create', { pageId, type: 'text', text }).then(res => {
+          if (!res || res.ok !== true) {
+            BX.UI.Notification.Center.notify({ content: 'Не удалось создать блок' });
+            return;
+          }
+          BX.UI.Notification.Center.notify({ content: 'Блок создан' });
+          mb.close();
+          loadBlocks();
+        }).catch(() => {
+          BX.UI.Notification.Center.notify({ content: 'Ошибка запроса block.create' });
+        });
+      }
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    // MOVE
+    const mvBtn = e.target.closest('[data-move-block-id]');
+    if (mvBtn) {
+      const id = parseInt(mvBtn.getAttribute('data-move-block-id'), 10);
+      const dir = mvBtn.getAttribute('data-move-dir');
+
+      api('block.move', { id, dir }).then(r => {
+        if (!r || r.ok !== true) {
+          BX.UI.Notification.Center.notify({ content: 'Не удалось переместить блок' });
+          return;
+        }
+        loadBlocks();
+      }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.move' }));
+
+      return;
+    }
+
+    // EDIT
+    const editBtn = e.target.closest('[data-edit-block-id]');
+    if (editBtn) {
+      const id = parseInt(editBtn.getAttribute('data-edit-block-id'), 10);
+
+      // Возьмём текущий текст (чтобы не хранить состояние в JS)
+      api('block.list', { pageId }).then(res => {
+        if (!res || res.ok !== true) {
+          BX.UI.Notification.Center.notify({ content: 'Не удалось загрузить блоки для редактирования' });
+          return;
+        }
+        const blk = (res.blocks || []).find(x => parseInt(x.id, 10) === id);
+        const current = blk && blk.content ? (blk.content.text || '') : '';
+
+        BX.UI.Dialogs.MessageBox.show({
+          title: 'Редактировать блок #' + id,
+          message: `
+            <textarea id="edit_text"
+              style="width:100%;height:160px;padding:8px;border:1px solid #d0d7de;border-radius:8px;">${BX.util.htmlspecialchars(current)}</textarea>
+          `,
+          buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
+          onOk: function (mb) {
+            const text = document.getElementById('edit_text')?.value ?? '';
+            api('block.update', { id, text }).then(r => {
+              if (!r || r.ok !== true) {
+                BX.UI.Notification.Center.notify({ content: 'Не удалось сохранить блок' });
+                return;
+              }
+              BX.UI.Notification.Center.notify({ content: 'Сохранено' });
+              mb.close();
+              loadBlocks();
+            }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.update' }));
+          }
+        });
+      }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.list' }));
+
+      return;
+    }
+
+    // DELETE
+    const delBtn = e.target.closest('[data-del-block-id]');
+    if (delBtn) {
+      const id = parseInt(delBtn.getAttribute('data-del-block-id'), 10);
+
+      BX.UI.Dialogs.MessageBox.show({
+        title: 'Удалить блок #' + id + '?',
+        message: 'Продолжить?',
+        buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
+        onOk: function (mb) {
+          api('block.delete', { id }).then(r => {
+            if (!r || r.ok !== true) {
+              BX.UI.Notification.Center.notify({ content: 'Не удалось удалить блок' });
+              return;
+            }
+            BX.UI.Notification.Center.notify({ content: 'Удалено' });
+            mb.close();
+            loadBlocks();
+          }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.delete' }));
+        }
+      });
+
+      return;
+    }
+  });
+
+  btnAddText.addEventListener('click', addTextBlock);
+  loadBlocks();
+});
+</script>
+</body>
+</html>
