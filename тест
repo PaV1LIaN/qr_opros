@@ -1,34 +1,141 @@
-function sb_read_blocks(): array {
-    $path = sb_data_path('blocks.json');
-    if (!file_exists($path)) {
-        return [];
+if ($action === 'block.list') {
+    $pageId = (int)($_POST['pageId'] ?? 0);
+    if ($pageId <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'PAGE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
     }
-    $raw = file_get_contents($path);
-    $data = json_decode((string)$raw, true);
-    return is_array($data) ? $data : [];
+
+    $blocks = sb_read_blocks();
+    $blocks = array_values(array_filter($blocks, fn($b) => (int)($b['pageId'] ?? 0) === $pageId));
+    usort($blocks, fn($a, $b) => (int)($a['sort'] ?? 500) <=> (int)($b['sort'] ?? 500));
+
+    echo json_encode(['ok' => true, 'blocks' => $blocks], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
-function sb_write_blocks(array $blocks): void {
-    $dir = dirname(sb_data_path('blocks.json'));
-    if (!is_dir($dir)) {
-        mkdir($dir, 0775, true);
+
+if ($action === 'block.create') {
+    $pageId = (int)($_POST['pageId'] ?? 0);
+    $type   = trim((string)($_POST['type'] ?? 'text'));
+
+    if ($pageId <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'PAGE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($type !== 'text') {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'TYPE_NOT_SUPPORTED'], JSON_UNESCAPED_UNICODE);
+        exit;
     }
 
-    $path = sb_data_path('blocks.json');
-    $fp = fopen($path, 'c+');
-    if (!$fp) {
-        throw new \RuntimeException('Cannot open blocks.json');
-    }
+    $blocks = sb_read_blocks();
 
-    if (!flock($fp, LOCK_EX)) {
-        fclose($fp);
-        throw new \RuntimeException('Cannot lock blocks.json');
+    $maxId = 0;
+    foreach ($blocks as $b) {
+        $maxId = max($maxId, (int)($b['id'] ?? 0));
     }
+    $id = $maxId + 1;
 
-    ftruncate($fp, 0);
-    rewind($fp);
-    fwrite($fp, json_encode(array_values($blocks), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
+    // sort: ставим в конец
+    $maxSort = 0;
+    foreach ($blocks as $b) {
+        if ((int)($b['pageId'] ?? 0) === $pageId) {
+            $maxSort = max($maxSort, (int)($b['sort'] ?? 0));
+        }
+    }
+    $sort = $maxSort + 10;
+
+    $block = [
+        'id' => $id,
+        'pageId' => $pageId,
+        'type' => 'text',
+        'sort' => $sort,
+        'content' => [
+            'text' => (string)($_POST['text'] ?? ''),
+        ],
+        'createdBy' => (int)$USER->GetID(),
+        'createdAt' => date('c'),
+        'updatedAt' => date('c'),
+    ];
+
+    $blocks[] = $block;
+    sb_write_blocks($blocks);
+
+    echo json_encode(['ok' => true, 'block' => $block], JSON_UNESCAPED_UNICODE);
+    exit;
 }
+
+
+
+
+
+
+if ($action === 'block.update') {
+    $id   = (int)($_POST['id'] ?? 0);
+    $text = (string)($_POST['text'] ?? '');
+
+    if ($id <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $blocks = sb_read_blocks();
+    $found = false;
+
+    foreach ($blocks as &$b) {
+        if ((int)($b['id'] ?? 0) === $id) {
+            if (($b['type'] ?? '') !== 'text') {
+                http_response_code(422);
+                echo json_encode(['ok' => false, 'error' => 'TYPE_NOT_SUPPORTED'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $b['content']['text'] = $text;
+            $b['updatedAt'] = date('c');
+            $found = true;
+            break;
+        }
+    }
+    unset($b);
+
+    if (!$found) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'NOT_FOUND'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    sb_write_blocks($blocks);
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+
+
+if ($action === 'block.delete') {
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $blocks = sb_read_blocks();
+    $before = count($blocks);
+    $blocks = array_values(array_filter($blocks, fn($b) => (int)($b['id'] ?? 0) !== $id));
+    $after = count($blocks);
+
+    if ($after === $before) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'NOT_FOUND'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    sb_write_blocks($blocks);
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+
+
