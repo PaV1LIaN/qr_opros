@@ -1,75 +1,20 @@
-if ($action === 'block.move') {
-    $id  = (int)($_POST['id'] ?? 0);
-    $dir = (string)($_POST['dir'] ?? '');
+<button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="up">↑</button>
+<button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${b.id}" data-move-dir="down">↓</button>
+<button class="ui-btn ui-btn-light ui-btn-xs" data-edit-block-id="${b.id}">Редактировать</button>
+<button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${b.id}">Удалить</button>
 
-    if ($id <= 0) {
-        http_response_code(422);
-        echo json_encode(['ok' => false, 'error' => 'ID_REQUIRED'], JSON_UNESCAPED_UNICODE);
-        exit;
+const mvBtn = e.target.closest('[data-move-block-id]');
+if (mvBtn) {
+  const id = parseInt(mvBtn.getAttribute('data-move-block-id'), 10);
+  const dir = mvBtn.getAttribute('data-move-dir');
+
+  api('block.move', { id, dir }).then(r => {
+    if (!r || r.ok !== true) {
+      BX.UI.Notification.Center.notify({ content: 'Не удалось переместить блок' });
+      return;
     }
-    if ($dir !== 'up' && $dir !== 'down') {
-        http_response_code(422);
-        echo json_encode(['ok' => false, 'error' => 'DIR_REQUIRED'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    loadBlocks();
+  }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.move' }));
 
-    $blocks = sb_read_blocks();
-
-    // найдём блок
-    $idx = null;
-    for ($i = 0; $i < count($blocks); $i++) {
-        if ((int)($blocks[$i]['id'] ?? 0) === $id) { $idx = $i; break; }
-    }
-    if ($idx === null) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'error' => 'NOT_FOUND'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
-    $pageId = (int)($blocks[$idx]['pageId'] ?? 0);
-
-    // список блоков этой страницы, сортировка по sort
-    $pageBlocks = array_values(array_filter($blocks, fn($b) => (int)($b['pageId'] ?? 0) === $pageId));
-    usort($pageBlocks, fn($a, $b) => (int)($a['sort'] ?? 500) <=> (int)($b['sort'] ?? 500));
-
-    // позиция текущего блока в pageBlocks
-    $pos = null;
-    for ($i = 0; $i < count($pageBlocks); $i++) {
-        if ((int)($pageBlocks[$i]['id'] ?? 0) === $id) { $pos = $i; break; }
-    }
-
-    if ($pos === null) {
-        http_response_code(500);
-        echo json_encode(['ok' => false, 'error' => 'INTERNAL'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
-    if ($dir === 'up' && $pos === 0) {
-        echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-    if ($dir === 'down' && $pos === count($pageBlocks) - 1) {
-        echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
-    $swapWith = ($dir === 'up') ? $pos - 1 : $pos + 1;
-
-    $idA = (int)$pageBlocks[$pos]['id'];
-    $idB = (int)$pageBlocks[$swapWith]['id'];
-    $sortA = (int)($pageBlocks[$pos]['sort'] ?? 500);
-    $sortB = (int)($pageBlocks[$swapWith]['sort'] ?? 500);
-
-    // поменяем sort местами в основном массиве $blocks
-    foreach ($blocks as &$b) {
-        $bid = (int)($b['id'] ?? 0);
-        if ($bid === $idA) { $b['sort'] = $sortB; $b['updatedAt'] = date('c'); }
-        if ($bid === $idB) { $b['sort'] = $sortA; $b['updatedAt'] = date('c'); }
-    }
-    unset($b);
-
-    sb_write_blocks($blocks);
-
-    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
-    exit;
+  return;
 }
