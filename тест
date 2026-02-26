@@ -5,468 +5,182 @@ define('DisableEventsCheck', true);
 
 require $_SERVER['DOCUMENT_ROOT'].'/bitrix/modules/main/include/prolog_before.php';
 
-global $USER, $APPLICATION;
+use Bitrix\Main\Loader;
+use Bitrix\Disk\File;
+use Bitrix\Disk\Folder;
+
+global $USER;
 
 if (!$USER->IsAuthorized()) {
-    LocalRedirect('/auth/');
+    http_response_code(401);
+    echo 'NOT_AUTHORIZED';
+    exit;
 }
 
-header('Content-Type: text/html; charset=UTF-8');
-
-\Bitrix\Main\UI\Extension::load([
-    'main.core',
-    'ui.buttons',
-    'ui.dialogs.messagebox',
-    'ui.notification',
-]);
+if (!Loader::includeModule('disk')) {
+    http_response_code(500);
+    echo 'DISK_NOT_INSTALLED';
+    exit;
+}
 
 $siteId = (int)($_GET['siteId'] ?? 0);
-$pageId = (int)($_GET['pageId'] ?? 0);
-?>
-<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Редактор блоков</title>
-  <?php $APPLICATION->ShowHead(); ?>
-  <style>
-    body { font-family: Arial, sans-serif; margin:0; background:#f6f7f8; }
-    .top { background:#fff; border-bottom:1px solid #e5e7ea; padding:12px 16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .content { padding: 18px; }
-    .card { background:#fff; border:1px solid #e5e7ea; border-radius:12px; padding:16px; }
-    .muted { color:#6a737f; }
-    .block { border:1px solid #eee; border-radius:10px; padding:12px; margin-top:10px; }
-    .row { display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-    .btns { display:flex; gap:6px; flex-wrap:wrap; }
-    pre { white-space:pre-wrap; margin:10px 0 0; background:#f9fafb; border:1px solid #eee; border-radius:8px; padding:10px; }
-    a { color:#0b57d0; text-decoration:none; }
-    a:hover { text-decoration:underline; }
-    code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
-    .imgPrev { margin-top:10px; max-width: 420px; border:1px solid #eee; border-radius:10px; overflow:hidden; background:#fafafa; }
-    .imgPrev img { display:block; width:100%; height:auto; }
-    .field { margin-top:10px; }
-    .field label { display:block; font-size:12px; color:#6a737f; margin-bottom:4px; }
-    .input, select, textarea { width:100%; padding:8px; border:1px solid #d0d7de; border-radius:8px; box-sizing:border-box; }
-  </style>
-</head>
-<body>
-  <div class="top">
-    <a href="/local/sitebuilder/index.php">← Назад</a>
-    <div class="muted">Редактор блоков</div>
-    <div class="muted">|</div>
-    <div><b>siteId:</b> <code><?= (int)$siteId ?></code></div>
-    <div><b>pageId:</b> <code><?= (int)$pageId ?></code></div>
+$fileId = (int)($_GET['fileId'] ?? 0);
 
-    <div style="flex:1;"></div>
+if ($siteId <= 0 || $fileId <= 0) {
+    http_response_code(422);
+    echo 'BAD_PARAMS';
+    exit;
+}
 
-    <a class="ui-btn ui-btn-light" target="_blank"
-       href="/local/sitebuilder/view.php?siteId=<?= (int)$siteId ?>&pageId=<?= (int)$pageId ?>">Открыть просмотр</a>
+/** ---------------- helpers: same access rules as api.php ---------------- */
 
-    <a class="ui-btn ui-btn-light" target="_blank"
-       href="/local/sitebuilder/files.php?siteId=<?= (int)$siteId ?>">Файлы</a>
-  </div>
+function sb_data_path(string $file): string {
+    return $_SERVER['DOCUMENT_ROOT'] . '/upload/sitebuilder/' . $file;
+}
 
-  <div class="content">
-    <div class="card">
-      <div class="row">
-        <div class="muted">Блоки: <b>Text</b> и <b>Image</b> (картинка из “Файлы”).</div>
-        <div class="btns">
-          <button class="ui-btn ui-btn-primary" id="btnAddText">+ Text</button>
-          <button class="ui-btn ui-btn-primary" id="btnAddImage">+ Image</button>
-        </div>
-      </div>
+function sb_read_json_file(string $file): array {
+    $path = sb_data_path($file);
+    if (!file_exists($path)) return [];
+    $raw = file_get_contents($path);
+    $data = json_decode((string)$raw, true);
+    return is_array($data) ? $data : [];
+}
 
-      <div id="blocksBox" style="margin-top:12px;"></div>
-    </div>
-  </div>
+function sb_user_access_code(): string {
+    return 'U' . (int)$GLOBALS['USER']->GetID();
+}
 
-<script>
-BX.ready(function () {
-  const siteId = <?= (int)$siteId ?>;
-  const pageId = <?= (int)$pageId ?>;
-
-  const blocksBox = document.getElementById('blocksBox');
-  const btnAddText = document.getElementById('btnAddText');
-  const btnAddImage = document.getElementById('btnAddImage');
-
-  function api(action, data) {
-    return new Promise((resolve, reject) => {
-      BX.ajax({
-        url: '/local/sitebuilder/api.php',
-        method: 'POST',
-        dataType: 'json',
-        data: Object.assign({ action, sessid: BX.bitrix_sessid() }, data || {}),
-        onsuccess: resolve,
-        onfailure: reject
-      });
-    });
-  }
-
-  function fileDownloadUrl(fileId) {
-    return `/local/sitebuilder/download.php?siteId=${siteId}&fileId=${fileId}`;
-  }
-
-  async function getFilesForSite() {
-    const res = await api('file.list', { siteId });
-    if (!res || res.ok !== true) throw new Error(res?.error || 'file.list failed');
-    return res.files || [];
-  }
-
-  function renderBlocks(blocks) {
-    if (!blocks || !blocks.length) {
-      blocksBox.innerHTML = '<div class="muted">Блоков нет. Добавь первый.</div>';
-      return;
+function sb_get_role(int $siteId, string $accessCode): ?string {
+    $access = sb_read_json_file('access.json');
+    foreach ($access as $r) {
+        if ((int)($r['siteId'] ?? 0) === $siteId && (string)($r['accessCode'] ?? '') === $accessCode) {
+            $role = strtoupper((string)($r['role'] ?? ''));
+            return $role !== '' ? $role : null;
+        }
     }
+    return null;
+}
 
-    blocksBox.innerHTML = blocks.map(b => {
-      const type = b.type || '';
-      const sort = b.sort;
-      const id = b.id;
+function sb_role_rank(?string $role): int {
+    $role = strtoupper((string)$role);
+    return match ($role) {
+        'OWNER'  => 4,
+        'ADMIN'  => 3,
+        'EDITOR' => 2,
+        'VIEWER' => 1,
+        default  => 0,
+    };
+}
 
-      if (type === 'text') {
-        const text = (b.content && typeof b.content.text === 'string') ? b.content.text : '';
-        return `
-          <div class="block">
-            <div class="row">
-              <div><b>#${id}</b> <span class="muted">(text | sort ${sort})</span></div>
-              <div class="btns">
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${id}" data-move-dir="up">↑</button>
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${id}" data-move-dir="down">↓</button>
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-edit-text-id="${id}">Редактировать</button>
-                <button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${id}">Удалить</button>
-              </div>
-            </div>
-            <pre>${BX.util.htmlspecialchars(text)}</pre>
-          </div>
-        `;
-      }
-
-      if (type === 'image') {
-        const fileId = b.content && b.content.fileId ? parseInt(b.content.fileId, 10) : 0;
-        const alt = b.content && typeof b.content.alt === 'string' ? b.content.alt : '';
-        const img = fileId
-          ? `<div class="imgPrev"><img src="${fileDownloadUrl(fileId)}" alt="${BX.util.htmlspecialchars(alt)}"></div>`
-          : '<div class="muted" style="margin-top:10px;">Файл не выбран</div>';
-
-        return `
-          <div class="block">
-            <div class="row">
-              <div><b>#${id}</b> <span class="muted">(image | sort ${sort} | fileId ${fileId || '-'})</span></div>
-              <div class="btns">
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${id}" data-move-dir="up">↑</button>
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-move-block-id="${id}" data-move-dir="down">↓</button>
-                <button class="ui-btn ui-btn-light ui-btn-xs" data-edit-image-id="${id}">Редактировать</button>
-                <button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${id}">Удалить</button>
-              </div>
-            </div>
-            <div class="muted" style="margin-top:8px;">alt: ${BX.util.htmlspecialchars(alt)}</div>
-            ${img}
-          </div>
-        `;
-      }
-
-      return `
-        <div class="block">
-          <div class="row">
-            <div><b>#${id}</b> <span class="muted">(unknown)</span></div>
-            <div class="btns">
-              <button class="ui-btn ui-btn-danger ui-btn-xs" data-del-block-id="${id}">Удалить</button>
-            </div>
-          </div>
-          <div class="muted" style="margin-top:10px;">Неизвестный тип: ${BX.util.htmlspecialchars(type)}</div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  function loadBlocks() {
-    api('block.list', { pageId }).then(res => {
-      if (!res || res.ok !== true) {
-        BX.UI.Notification.Center.notify({ content: 'Не удалось загрузить блоки' });
-        return;
-      }
-      renderBlocks(res.blocks);
-    }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.list' }));
-  }
-
-  function addTextBlock() {
-    BX.UI.Dialogs.MessageBox.show({
-      title: 'Новый Text блок',
-      message: '<textarea id="new_text" style="width:100%;height:140px;padding:8px;border:1px solid #d0d7de;border-radius:8px;"></textarea>',
-      buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
-      onOk: function (mb) {
-        const text = document.getElementById('new_text')?.value ?? '';
-        api('block.create', { pageId, type: 'text', text }).then(res => {
-          if (!res || res.ok !== true) {
-            BX.UI.Notification.Center.notify({ content: 'Не удалось создать блок' });
-            return;
-          }
-          BX.UI.Notification.Center.notify({ content: 'Блок создан' });
-          mb.close();
-          loadBlocks();
-        }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.create' }));
-      }
-    });
-  }
-
-  function addImageBlock() {
-    BX.UI.Dialogs.MessageBox.show({
-      title: 'Новый Image блок',
-      message: `
-        <div>
-          <div class="muted">Выбери файл из “Файлы” этого сайта.</div>
-
-          <div class="field">
-            <label>Файл</label>
-            <select id="img_file" class="input">
-              <option value="">Загрузка списка...</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label>ALT (текст для картинки)</label>
-            <input id="img_alt" class="input" placeholder="например: Логотип" />
-          </div>
-
-          <div id="img_preview" class="imgPrev" style="display:none;">
-            <img id="img_preview_img" src="" alt="">
-          </div>
-        </div>
-      `,
-      buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
-      onOk: function (mb) {
-        const fileId = parseInt(document.getElementById('img_file')?.value || '0', 10);
-        const alt = (document.getElementById('img_alt')?.value || '').trim();
-
-        if (!fileId) {
-          BX.UI.Notification.Center.notify({ content: 'Выбери файл' });
-          return;
-        }
-
-        api('block.create', { pageId, type: 'image', fileId, alt }).then(res => {
-          if (!res || res.ok !== true) {
-            BX.UI.Notification.Center.notify({ content: 'Не удалось создать image-блок' });
-            return;
-          }
-          BX.UI.Notification.Center.notify({ content: 'Image-блок создан' });
-          mb.close();
-          loadBlocks();
-        }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.create (image)' }));
-      }
-    });
-
-    // ВАЖНО: грузим список файлов ПОСЛЕ открытия модалки (onShow не везде работает)
-    setTimeout(async function () {
-      const sel = document.getElementById('img_file');
-      if (!sel) return;
-
-      try {
-        const files = await getFilesForSite();
-        if (!files.length) {
-          sel.innerHTML = '<option value="">Файлов нет (загрузите в “Файлы”)</option>';
-          return;
-        }
-
-        sel.innerHTML = '<option value="">— Выберите файл —</option>' + files.map(f =>
-          `<option value="${f.id}">${BX.util.htmlspecialchars(f.name)} (${f.id})</option>`
-        ).join('');
-
-        sel.addEventListener('change', function () {
-          const id = parseInt(sel.value || '0', 10);
-          const wrap = document.getElementById('img_preview');
-          const img = document.getElementById('img_preview_img');
-          if (!wrap || !img) return;
-
-          if (!id) {
-            wrap.style.display = 'none';
-            img.src = '';
-            return;
-          }
-          wrap.style.display = 'block';
-          img.src = fileDownloadUrl(id);
-        });
-
-      } catch (e) {
-        sel.innerHTML = '<option value="">Ошибка загрузки файлов</option>';
-        BX.UI.Notification.Center.notify({ content: 'Не удалось получить список файлов' });
-      }
-    }, 0);
-  }
-
-  function editTextBlock(id) {
-    api('block.list', { pageId }).then(res => {
-      if (!res || res.ok !== true) return;
-      const blk = (res.blocks || []).find(x => parseInt(x.id,10) === id);
-      const current = blk && blk.content ? (blk.content.text || '') : '';
-
-      BX.UI.Dialogs.MessageBox.show({
-        title: 'Редактировать Text #' + id,
-        message: `<textarea id="edit_text" style="width:100%;height:160px;padding:8px;border:1px solid #d0d7de;border-radius:8px;">${BX.util.htmlspecialchars(current)}</textarea>`,
-        buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
-        onOk: function (mb) {
-          const text = document.getElementById('edit_text')?.value ?? '';
-          api('block.update', { id, text }).then(r => {
-            if (!r || r.ok !== true) {
-              BX.UI.Notification.Center.notify({ content: 'Не удалось сохранить' });
-              return;
-            }
-            BX.UI.Notification.Center.notify({ content: 'Сохранено' });
-            mb.close();
-            loadBlocks();
-          }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.update' }));
-        }
-      });
-    });
-  }
-
-  function editImageBlock(id) {
-    api('block.list', { pageId }).then(res => {
-      if (!res || res.ok !== true) return;
-      const blk = (res.blocks || []).find(x => parseInt(x.id,10) === id);
-      const curFileId = blk && blk.content ? parseInt(blk.content.fileId || 0, 10) : 0;
-      const curAlt = blk && blk.content ? (blk.content.alt || '') : '';
-
-      BX.UI.Dialogs.MessageBox.show({
-        title: 'Редактировать Image #' + id,
-        message: `
-          <div>
-            <div class="field">
-              <label>Файл</label>
-              <select id="edit_img_file" class="input">
-                <option value="">Загрузка списка...</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label>ALT</label>
-              <input id="edit_img_alt" class="input" value="${BX.util.htmlspecialchars(curAlt)}" />
-            </div>
-
-            <div id="edit_img_preview" class="imgPrev" style="display:${curFileId ? 'block':'none'};">
-              <img id="edit_img_preview_img" src="${curFileId ? fileDownloadUrl(curFileId) : ''}" alt="">
-            </div>
-          </div>
-        `,
-        buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
-        onOk: function (mb) {
-          const fileId = parseInt(document.getElementById('edit_img_file')?.value || '0', 10);
-          const alt = (document.getElementById('edit_img_alt')?.value || '').trim();
-
-          if (!fileId) {
-            BX.UI.Notification.Center.notify({ content: 'Выбери файл' });
-            return;
-          }
-
-          api('block.update', { id, fileId, alt }).then(r => {
-            if (!r || r.ok !== true) {
-              BX.UI.Notification.Center.notify({ content: 'Не удалось сохранить image-блок' });
-              return;
-            }
-            BX.UI.Notification.Center.notify({ content: 'Сохранено' });
-            mb.close();
-            loadBlocks();
-          }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.update (image)' }));
-        }
-      });
-
-      // грузим список после открытия
-      setTimeout(async function () {
-        const sel = document.getElementById('edit_img_file');
-        if (!sel) return;
-
-        try {
-          const files = await getFilesForSite();
-          if (!files.length) {
-            sel.innerHTML = '<option value="">Файлов нет</option>';
-            return;
-          }
-
-          sel.innerHTML = '<option value="">— Выберите файл —</option>' + files.map(f => {
-            const selected = (parseInt(f.id,10) === curFileId) ? 'selected' : '';
-            return `<option value="${f.id}" ${selected}>${BX.util.htmlspecialchars(f.name)} (${f.id})</option>`;
-          }).join('');
-
-          sel.addEventListener('change', function () {
-            const fid = parseInt(sel.value || '0', 10);
-            const wrap = document.getElementById('edit_img_preview');
-            const img = document.getElementById('edit_img_preview_img');
-            if (!wrap || !img) return;
-
-            if (!fid) {
-              wrap.style.display = 'none';
-              img.src = '';
-              return;
-            }
-            wrap.style.display = 'block';
-            img.src = fileDownloadUrl(fid);
-          });
-
-        } catch (e) {
-          sel.innerHTML = '<option value="">Ошибка загрузки файлов</option>';
-          BX.UI.Notification.Center.notify({ content: 'Не удалось получить список файлов' });
-        }
-      }, 0);
-    });
-  }
-
-  document.addEventListener('click', function (e) {
-    const mvBtn = e.target.closest('[data-move-block-id]');
-    if (mvBtn) {
-      const id = parseInt(mvBtn.getAttribute('data-move-block-id'), 10);
-      const dir = mvBtn.getAttribute('data-move-dir');
-      api('block.move', { id, dir }).then(r => {
-        if (!r || r.ok !== true) {
-          BX.UI.Notification.Center.notify({ content: 'Не удалось переместить блок' });
-          return;
-        }
-        loadBlocks();
-      }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.move' }));
-      return;
+function sb_require_viewer(int $siteId): void {
+    $role = sb_get_role($siteId, sb_user_access_code());
+    if (sb_role_rank($role) < 1) {
+        http_response_code(403);
+        echo 'FORBIDDEN';
+        exit;
     }
+}
 
-    const delBtn = e.target.closest('[data-del-block-id]');
-    if (delBtn) {
-      const id = parseInt(delBtn.getAttribute('data-del-block-id'), 10);
-      BX.UI.Dialogs.MessageBox.show({
-        title: 'Удалить блок #' + id + '?',
-        message: 'Продолжить?',
-        buttons: BX.UI.Dialogs.MessageBoxButtons.OK_CANCEL,
-        onOk: function (mb) {
-          api('block.delete', { id }).then(r => {
-            if (!r || r.ok !== true) {
-              BX.UI.Notification.Center.notify({ content: 'Не удалось удалить блок' });
-              return;
-            }
-            BX.UI.Notification.Center.notify({ content: 'Удалено' });
-            mb.close();
-            loadBlocks();
-          }).catch(() => BX.UI.Notification.Center.notify({ content: 'Ошибка block.delete' }));
+function sb_site_disk_folder_id(int $siteId): int {
+    $sites = sb_read_json_file('sites.json');
+    foreach ($sites as $s) {
+        if ((int)($s['id'] ?? 0) === $siteId) {
+            return (int)($s['diskFolderId'] ?? 0);
         }
-      });
-      return;
     }
+    return 0;
+}
 
-    const et = e.target.closest('[data-edit-text-id]');
-    if (et) {
-      const id = parseInt(et.getAttribute('data-edit-text-id'), 10);
-      editTextBlock(id);
-      return;
+/** ---------------- access check ---------------- */
+
+sb_require_viewer($siteId);
+
+/** ---------------- load site folder ---------------- */
+
+$folderId = sb_site_disk_folder_id($siteId);
+if ($folderId <= 0) {
+    http_response_code(404);
+    echo 'SITE_FOLDER_NOT_FOUND';
+    exit;
+}
+
+$folder = Folder::loadById($folderId);
+if (!$folder) {
+    http_response_code(404);
+    echo 'SITE_FOLDER_NOT_FOUND';
+    exit;
+}
+
+/** ---------------- load file + ensure it belongs to folder ---------------- */
+
+$file = File::loadById($fileId);
+if (!$file) {
+    http_response_code(404);
+    echo 'FILE_NOT_FOUND';
+    exit;
+}
+
+if ((int)$file->getParentId() !== (int)$folder->getId()) {
+    http_response_code(403);
+    echo 'FOREIGN_FILE';
+    exit;
+}
+
+/** ---------------- get physical file id robustly ---------------- */
+
+$realFileId = 0;
+
+// 1) Prefer getFileId() if exists
+if (method_exists($file, 'getFileId')) {
+    $realFileId = (int)$file->getFileId();
+}
+
+// 2) Fallback: getFile() may return array or object depending on version
+if ($realFileId <= 0 && method_exists($file, 'getFile')) {
+    $src = $file->getFile();
+
+    if (is_array($src)) {
+        $realFileId = (int)($src['ID'] ?? $src['Id'] ?? $src['id'] ?? 0);
+    } elseif (is_object($src) && method_exists($src, 'getId')) {
+        $realFileId = (int)$src->getId();
     }
+}
 
-    const ei = e.target.closest('[data-edit-image-id]');
-    if (ei) {
-      const id = parseInt(ei.getAttribute('data-edit-image-id'), 10);
-      editImageBlock(id);
-      return;
-    }
-  });
+if ($realFileId <= 0) {
+    http_response_code(500);
+    echo 'FILE_SOURCE_NOT_FOUND';
+    exit;
+}
 
-  btnAddText.addEventListener('click', addTextBlock);
-  btnAddImage.addEventListener('click', addImageBlock);
+/** ---------------- stream physical file ---------------- */
 
-  loadBlocks();
-});
-</script>
-</body>
-</html>
+$rel = \CFile::GetPath($realFileId);
+if (!is_string($rel) || $rel === '') {
+    http_response_code(404);
+    echo 'FILE_NOT_ON_DISK';
+    exit;
+}
+
+$abs = $_SERVER['DOCUMENT_ROOT'] . $rel;
+if (!is_file($abs)) {
+    http_response_code(404);
+    echo 'FILE_NOT_ON_DISK';
+    exit;
+}
+
+$downloadName = (string)$file->getName();
+
+// mime (best effort)
+$mime = 'application/octet-stream';
+if (function_exists('mime_content_type')) {
+    $m = @mime_content_type($abs);
+    if (is_string($m) && $m !== '') $mime = $m;
+}
+
+header('Content-Type: ' . $mime);
+header('Content-Disposition: attachment; filename="' . rawurlencode($downloadName) . '"');
+header('Content-Length: ' . filesize($abs));
+header('X-Content-Type-Options: nosniff');
+
+readfile($abs);
+exit;
