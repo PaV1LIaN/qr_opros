@@ -1,10 +1,22 @@
-{ok: false, error: "DISK_ERROR",…}
-error
-: 
-"DISK_ERROR"
-message
-: 
-"Call to undefined method Bitrix\\Disk\\Storage::loadByEntity()"
-ok
-: 
-false
+function sb_disk_common_storage(): Storage {
+    if (!Loader::includeModule('disk')) {
+        throw new \RuntimeException('DISK_NOT_INSTALLED');
+    }
+
+    // В новых версиях бывает Storage::loadByEntity('common', 0)
+    if (method_exists(\Bitrix\Disk\Storage::class, 'loadByEntity')) {
+        $storage = \Bitrix\Disk\Storage::loadByEntity('common', 0);
+        if ($storage) return $storage;
+    }
+
+    // В старых/коробочных версиях общий диск часто так:
+    $driver = \Bitrix\Disk\Driver::getInstance();
+
+    if (method_exists($driver, 'getStorageByCommonId')) {
+        $storage = $driver->getStorageByCommonId('shared_files_' . SITE_ID);
+        if ($storage) return $storage;
+    }
+
+    // Фолбэк: если ни один способ не дал storage
+    throw new \RuntimeException('COMMON_STORAGE_NOT_FOUND');
+}
