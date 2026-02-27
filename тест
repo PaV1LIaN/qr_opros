@@ -586,4 +586,499 @@ if ($action === 'block.create') {
         'type' => $type,
         'sort' => $sort,
         'content' => $content,
-        'createdBy' => (int)$USER
+        'createdBy' => (int)$USER->GetID(),
+        'createdAt' => date('c'),
+        'updatedAt' => date('c'),
+    ];
+
+    $blocks[] = $block;
+    sb_write_blocks($blocks);
+
+    echo json_encode(['ok' => true, 'block' => $block], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'block.update') {
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $blk = sb_find_block($id);
+    if (!$blk) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $page = sb_find_page((int)($blk['pageId'] ?? 0));
+    if (!$page) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'PAGE_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+    $siteId = (int)($page['siteId'] ?? 0);
+    sb_require_editor($siteId);
+
+    $blocks = sb_read_blocks();
+    $found = false;
+
+    foreach ($blocks as &$b) {
+        if ((int)($b['id'] ?? 0) !== $id) continue;
+
+        $type = (string)($b['type'] ?? '');
+
+        if ($type === 'text') {
+            $b['content']['text'] = (string)($_POST['text'] ?? '');
+        } elseif ($type === 'image') {
+            $fileId = (int)($_POST['fileId'] ?? 0);
+            $alt = (string)($_POST['alt'] ?? '');
+            if ($fileId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'FILE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+            if (!sb_disk_file_belongs_to_site($siteId, $fileId)) {
+                http_response_code(422);
+                echo json_encode(['ok'=>false,'error'=>'FILE_NOT_IN_SITE_FOLDER'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $b['content']['fileId'] = $fileId;
+            $b['content']['alt'] = $alt;
+        } elseif ($type === 'button') {
+            $text = trim((string)($_POST['text'] ?? ''));
+            $url  = trim((string)($_POST['url'] ?? ''));
+            $variant = strtolower(trim((string)($_POST['variant'] ?? 'primary')));
+
+            if ($text === '') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'TEXT_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+            if ($url === '')  { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'URL_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+            if (!in_array($variant, ['primary','secondary'], true)) $variant = 'primary';
+
+            if (!(preg_match('~^https?://~i', $url) || str_starts_with($url, '/'))) {
+                http_response_code(422);
+                echo json_encode(['ok'=>false,'error'=>'URL_BAD_FORMAT'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+
+            $b['content']['text'] = $text;
+            $b['content']['url'] = $url;
+            $b['content']['variant'] = $variant;
+        } else {
+            http_response_code(422);
+            echo json_encode(['ok'=>false,'error'=>'TYPE_NOT_SUPPORTED'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $b['updatedAt'] = date('c');
+        $found = true;
+        break;
+    }
+    unset($b);
+
+    if (!$found) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    sb_write_blocks($blocks);
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'block.delete') {
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $blk = sb_find_block($id);
+    if (!$blk) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $page = sb_find_page((int)($blk['pageId'] ?? 0));
+    if (!$page) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'PAGE_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor((int)($page['siteId'] ?? 0));
+
+    $blocks = sb_read_blocks();
+    $blocks = array_values(array_filter($blocks, fn($b) => (int)($b['id'] ?? 0) !== $id));
+    sb_write_blocks($blocks);
+
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'block.move') {
+    $id  = (int)($_POST['id'] ?? 0);
+    $dir = (string)($_POST['dir'] ?? '');
+
+    if ($id <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($dir !== 'up' && $dir !== 'down') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'DIR_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $blk = sb_find_block($id);
+    if (!$blk) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $page = sb_find_page((int)($blk['pageId'] ?? 0));
+    if (!$page) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'PAGE_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor((int)($page['siteId'] ?? 0));
+
+    $blocks = sb_read_blocks();
+    $pageId = (int)($blk['pageId'] ?? 0);
+
+    $pageBlocks = array_values(array_filter($blocks, fn($b) => (int)($b['pageId'] ?? 0) === $pageId));
+    usort($pageBlocks, fn($a,$b) => (int)($a['sort'] ?? 500) <=> (int)($b['sort'] ?? 500));
+
+    $pos = null;
+    for ($i=0; $i<count($pageBlocks); $i++) {
+        if ((int)($pageBlocks[$i]['id'] ?? 0) === $id) { $pos = $i; break; }
+    }
+    if ($pos === null) { http_response_code(500); echo json_encode(['ok'=>false,'error'=>'INTERNAL'], JSON_UNESCAPED_UNICODE); exit; }
+
+    if ($dir === 'up' && $pos === 0) { echo json_encode(['ok'=>true], JSON_UNESCAPED_UNICODE); exit; }
+    if ($dir === 'down' && $pos === count($pageBlocks)-1) { echo json_encode(['ok'=>true], JSON_UNESCAPED_UNICODE); exit; }
+
+    $swapWith = ($dir === 'up') ? $pos - 1 : $pos + 1;
+
+    $idA = (int)$pageBlocks[$pos]['id'];
+    $idB = (int)$pageBlocks[$swapWith]['id'];
+    $sortA = (int)($pageBlocks[$pos]['sort'] ?? 500);
+    $sortB = (int)($pageBlocks[$swapWith]['sort'] ?? 500);
+
+    foreach ($blocks as &$b) {
+        $bid = (int)($b['id'] ?? 0);
+        if ($bid === $idA) { $b['sort'] = $sortB; $b['updatedAt'] = date('c'); }
+        if ($bid === $idB) { $b['sort'] = $sortA; $b['updatedAt'] = date('c'); }
+    }
+    unset($b);
+
+    sb_write_blocks($blocks);
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/** -------------------- FILES -------------------- */
+
+if ($action === 'file.list') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_viewer($siteId);
+
+    try {
+        $folder = sb_disk_ensure_site_folder($siteId);
+        sb_disk_sync_folder_rights($siteId, $folder);
+
+        $storage = $folder->getStorage();
+        $children = sb_disk_get_children($folder, $storage);
+
+        $files = [];
+        foreach ($children as $obj) {
+            if ($obj instanceof File) {
+                $files[] = [
+                    'id' => (int)$obj->getId(),
+                    'name' => (string)$obj->getName(),
+                    'size' => (int)$obj->getSize(),
+                    'createdAt' => $obj->getCreateTime() ? $obj->getCreateTime()->toString() : '',
+                ];
+            }
+        }
+
+        $myRole = sb_get_role($siteId, sb_user_access_code());
+
+        echo json_encode([
+            'ok' => true,
+            'myRole' => $myRole,
+            'folder' => ['id' => (int)$folder->getId(), 'name' => (string)$folder->getName()],
+            'files' => $files,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'DISK_ERROR', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+if ($action === 'file.upload') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    if (empty($_FILES['file']) || !is_array($_FILES['file'])) {
+        http_response_code(422);
+        echo json_encode(['ok' => false, 'error' => 'FILE_REQUIRED'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $folder = sb_disk_ensure_site_folder($siteId);
+        sb_disk_sync_folder_rights($siteId, $folder);
+
+        $storage = $folder->getStorage();
+        $fileArray = $_FILES['file'];
+        $name = (string)($fileArray['name'] ?? 'file');
+
+        $uploaded = sb_disk_upload_file($folder, $fileArray, [
+            'NAME' => $name,
+            'CREATED_BY' => (int)$USER->GetID(),
+        ], $storage);
+
+        echo json_encode([
+            'ok' => true,
+            'file' => [
+                'id' => (int)$uploaded->getId(),
+                'name' => (string)$uploaded->getName(),
+                'size' => (int)$uploaded->getSize(),
+            ]
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'DISK_ERROR', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+if ($action === 'file.delete') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $fileId = (int)($_POST['fileId'] ?? 0);
+
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($fileId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'FILE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    try {
+        $folder = sb_disk_ensure_site_folder($siteId);
+        sb_disk_sync_folder_rights($siteId, $folder);
+
+        $file = File::loadById($fileId);
+        if (!$file) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'FILE_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+        if ((int)$file->getParentId() !== (int)$folder->getId()) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'FOREIGN_FILE'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $deleted = $file->delete((int)$USER->GetID());
+        if (!$deleted) { http_response_code(500); echo json_encode(['ok'=>false,'error'=>'DELETE_FAILED'], JSON_UNESCAPED_UNICODE); exit; }
+
+        echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'DISK_ERROR', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/** -------------------- MENU -------------------- */
+
+if ($action === 'menu.list') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_viewer($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    $menus = $rec ? ($rec['menus'] ?? []) : [];
+
+    foreach ($menus as &$m) {
+        $items = $m['items'] ?? [];
+        usort($items, fn($a,$b) => (int)($a['sort'] ?? 0) <=> (int)($b['sort'] ?? 0));
+        $m['items'] = $items;
+    }
+    unset($m);
+
+    echo json_encode(['ok' => true, 'menus' => $menus], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'menu.create') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($name === '') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'NAME_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    if (!$rec) $rec = ['siteId' => $siteId, 'menus' => []];
+
+    $menuId = sb_menu_next_menu_id($rec);
+    $menu = [
+        'id' => $menuId,
+        'name' => $name,
+        'items' => [],
+        'createdBy' => (int)$USER->GetID(),
+        'createdAt' => date('c'),
+        'updatedAt' => date('c'),
+    ];
+
+    $rec['menus'][] = $menu;
+    sb_menu_upsert_site_record($all, $siteId, $rec);
+    sb_write_menus($all);
+
+    echo json_encode(['ok' => true, 'menu' => $menu], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'menu.update') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $menuId = (int)($_POST['menuId'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($menuId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'MENU_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($name === '') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'NAME_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    if (!$rec) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $ok = sb_menu_update_menu($rec, $menuId, function($m) use ($name) {
+        $m['name'] = $name;
+        $m['updatedAt'] = date('c');
+        return $m;
+    });
+
+    if (!$ok) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    sb_menu_upsert_site_record($all, $siteId, $rec);
+    sb_write_menus($all);
+
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'menu.item.add') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $menuId = (int)($_POST['menuId'] ?? 0);
+    $type = strtolower(trim((string)($_POST['type'] ?? 'page')));
+    $title = trim((string)($_POST['title'] ?? ''));
+
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($menuId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'MENU_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if (!in_array($type, ['page','url'], true)) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'TYPE_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    if (!$rec) $rec = ['siteId' => $siteId, 'menus' => []];
+
+    $menu = sb_menu_find_menu($rec, $menuId);
+    if (!$menu) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $items = $menu['items'] ?? [];
+    $itemId = sb_menu_next_item_id($menu);
+    $sort = sb_menu_next_sort($items);
+
+    $item = [
+        'id' => $itemId,
+        'type' => $type,
+        'title' => $title,
+        'sort' => $sort,
+    ];
+
+    if ($type === 'page') {
+        $pageId = (int)($_POST['pageId'] ?? 0);
+        if ($pageId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'PAGE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+        $p = sb_find_page($pageId);
+        if (!$p || (int)($p['siteId'] ?? 0) !== $siteId) {
+            http_response_code(422);
+            echo json_encode(['ok'=>false,'error'=>'PAGE_NOT_IN_SITE'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $item['pageId'] = $pageId;
+        if ($item['title'] === '') $item['title'] = (string)($p['title'] ?? ('page#'.$pageId));
+    } else {
+        $url = trim((string)($_POST['url'] ?? ''));
+        if ($url === '') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'URL_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+        if (!(preg_match('~^https?://~i', $url) || str_starts_with($url, '/'))) {
+            http_response_code(422);
+            echo json_encode(['ok'=>false,'error'=>'URL_BAD_FORMAT'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $item['url'] = $url;
+        if ($item['title'] === '') $item['title'] = $url;
+    }
+
+    $items[] = $item;
+    $menu['items'] = $items;
+    $menu['updatedAt'] = date('c');
+
+    sb_menu_update_menu($rec, $menuId, fn($_) => $menu);
+    sb_menu_upsert_site_record($all, $siteId, $rec);
+    sb_write_menus($all);
+
+    echo json_encode(['ok' => true, 'item' => $item], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'menu.item.delete') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $menuId = (int)($_POST['menuId'] ?? 0);
+    $itemId = (int)($_POST['itemId'] ?? 0);
+
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($menuId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'MENU_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($itemId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'ITEM_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    if (!$rec) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $changed = sb_menu_update_menu($rec, $menuId, function($m) use ($itemId) {
+        $items = $m['items'] ?? [];
+        $before = count($items);
+        $items = array_values(array_filter($items, fn($it) => (int)($it['id'] ?? 0) !== $itemId));
+        if (count($items) === $before) return $m;
+        $m['items'] = $items;
+        $m['updatedAt'] = date('c');
+        return $m;
+    });
+
+    if (!$changed) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    sb_menu_upsert_site_record($all, $siteId, $rec);
+    sb_write_menus($all);
+
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'menu.item.move') {
+    $siteId = (int)($_POST['siteId'] ?? 0);
+    $menuId = (int)($_POST['menuId'] ?? 0);
+    $itemId = (int)($_POST['itemId'] ?? 0);
+    $dir = (string)($_POST['dir'] ?? '');
+
+    if ($siteId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'SITE_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($menuId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'MENU_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($itemId <= 0) { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'ITEM_ID_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    if ($dir !== 'up' && $dir !== 'down') { http_response_code(422); echo json_encode(['ok'=>false,'error'=>'DIR_REQUIRED'], JSON_UNESCAPED_UNICODE); exit; }
+    sb_require_editor($siteId);
+
+    $all = sb_read_menus();
+    $rec = sb_menu_get_site_record($all, $siteId);
+    if (!$rec) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    $changed = sb_menu_update_menu($rec, $menuId, function($m) use ($itemId, $dir) {
+        $items = $m['items'] ?? [];
+        usort($items, fn($a,$b) => (int)($a['sort'] ?? 0) <=> (int)($b['sort'] ?? 0));
+
+        $pos = null;
+        for ($i=0; $i<count($items); $i++) {
+            if ((int)($items[$i]['id'] ?? 0) === $itemId) { $pos = $i; break; }
+        }
+        if ($pos === null) return $m;
+
+        if ($dir === 'up' && $pos === 0) return $m;
+        if ($dir === 'down' && $pos === count($items)-1) return $m;
+
+        $swap = ($dir === 'up') ? $pos-1 : $pos+1;
+
+        $sortA = (int)($items[$pos]['sort'] ?? 0);
+        $sortB = (int)($items[$swap]['sort'] ?? 0);
+
+        $items[$pos]['sort'] = $sortB;
+        $items[$swap]['sort'] = $sortA;
+
+        $m['items'] = $items;
+        $m['updatedAt'] = date('c');
+        return $m;
+    });
+
+    if (!$changed) { http_response_code(404); echo json_encode(['ok'=>false,'error'=>'MENU_NOT_FOUND'], JSON_UNESCAPED_UNICODE); exit; }
+
+    sb_menu_upsert_site_record($all, $siteId, $rec);
+    sb_write_menus($all);
+
+    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+http_response_code(400);
+echo json_encode(['ok' => false, 'error' => 'UNKNOWN_ACTION', 'action' => $action], JSON_UNESCAPED_UNICODE);
